@@ -1,0 +1,8 @@
+{
+  "openapi.yaml": 100,
+  "fixtures/clean-3.0.yaml": 97,
+  "fixtures/clean-3.1.yaml": 97,
+  "fixtures/many-operations-3.0.yaml": 0,
+  "fixtures/violations-3.0.yaml": 8,
+  "fixtures/violations-3.1.yaml": 85
+}

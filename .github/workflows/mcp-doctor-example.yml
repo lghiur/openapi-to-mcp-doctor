@@ -1,0 +1,36 @@
+# Copy-paste PR workflow for the MCP Doctor action.
+#
+# `closed` is included so the stacked fix PR (behavior: fix-pr) gets
+# re-pointed or closed when the source PR closes. fetch-depth: 0 gives the
+# action the base branch it needs for delta gating. The concurrency group
+# cancels superseded runs when new pushes land on the same PR.
+name: MCP Doctor
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  group: mcp-doctor-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read # summary level; fix-pr needs contents: write
+  pull-requests: write # comment / review / fix-pr levels
+
+jobs:
+  mcp-doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: MCP Doctor
+        uses: ./ # or: TykTechnologies/openapi-to-mcp-doctor@v1
+        with:
+          behavior: comment # summary | comment | review | fix-pr
+          # spec: api/openapi.yaml       # omit to auto-detect
+          # route-paths: internal/api/   # files or directories; omit to auto-discover
+          # fail-on: never               # PR default: advisory
+          llm-base-url: ${{ secrets.LLM_BASE_URL }}
+          llm-api-token: ${{ secrets.LLM_API_TOKEN }}

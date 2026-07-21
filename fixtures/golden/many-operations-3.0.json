@@ -1,0 +1,243 @@
+{
+  "version": "3.0",
+  "halted": false,
+  "summary": {
+    "total": 46,
+    "errors": 0,
+    "warnings": 46,
+    "info": 0
+  },
+  "healthScore": 0,
+  "findings": [
+    {
+      "rule": "info-contact",
+      "severity": "warning",
+      "path": "info"
+    },
+    {
+      "rule": "info-description",
+      "severity": "warning",
+      "path": "info"
+    },
+    {
+      "rule": "mcp-operation-count-warn",
+      "severity": "warning",
+      "path": "paths"
+    },
+    {
+      "rule": "oas3-api-servers",
+      "severity": "warning",
+      "path": ""
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource0/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource1/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource10/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource11/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource12/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource13/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource14/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource15/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource16/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource17/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource18/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource19/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource2/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource20/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource21/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource22/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource23/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource24/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource25/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource26/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource27/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource28/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource29/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource3/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource30/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource31/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource32/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource33/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource34/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource35/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource36/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource37/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource38/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource39/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource4/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource40/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource5/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource6/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource7/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource8/get"
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//resource9/get"
+    },
+    {
+      "rule": "owasp-no-security-schemes",
+      "severity": "warning",
+      "path": ""
+    }
+  ]
+}

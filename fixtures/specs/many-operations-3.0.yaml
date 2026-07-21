@@ -1,0 +1,497 @@
+openapi: 3.0.3
+info:
+  title: Large API
+  version: 1.0.0
+paths:
+  /resource0:
+    get:
+      operationId: get_resource_0
+      description: Returns resource 0 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 0.
+  /resource1:
+    get:
+      operationId: get_resource_1
+      description: Returns resource 1 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 1.
+  /resource2:
+    get:
+      operationId: get_resource_2
+      description: Returns resource 2 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 2.
+  /resource3:
+    get:
+      operationId: get_resource_3
+      description: Returns resource 3 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 3.
+  /resource4:
+    get:
+      operationId: get_resource_4
+      description: Returns resource 4 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 4.
+  /resource5:
+    get:
+      operationId: get_resource_5
+      description: Returns resource 5 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 5.
+  /resource6:
+    get:
+      operationId: get_resource_6
+      description: Returns resource 6 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 6.
+  /resource7:
+    get:
+      operationId: get_resource_7
+      description: Returns resource 7 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 7.
+  /resource8:
+    get:
+      operationId: get_resource_8
+      description: Returns resource 8 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 8.
+  /resource9:
+    get:
+      operationId: get_resource_9
+      description: Returns resource 9 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 9.
+  /resource10:
+    get:
+      operationId: get_resource_10
+      description: Returns resource 10 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 10.
+  /resource11:
+    get:
+      operationId: get_resource_11
+      description: Returns resource 11 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 11.
+  /resource12:
+    get:
+      operationId: get_resource_12
+      description: Returns resource 12 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 12.
+  /resource13:
+    get:
+      operationId: get_resource_13
+      description: Returns resource 13 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 13.
+  /resource14:
+    get:
+      operationId: get_resource_14
+      description: Returns resource 14 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 14.
+  /resource15:
+    get:
+      operationId: get_resource_15
+      description: Returns resource 15 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 15.
+  /resource16:
+    get:
+      operationId: get_resource_16
+      description: Returns resource 16 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 16.
+  /resource17:
+    get:
+      operationId: get_resource_17
+      description: Returns resource 17 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 17.
+  /resource18:
+    get:
+      operationId: get_resource_18
+      description: Returns resource 18 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 18.
+  /resource19:
+    get:
+      operationId: get_resource_19
+      description: Returns resource 19 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 19.
+  /resource20:
+    get:
+      operationId: get_resource_20
+      description: Returns resource 20 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 20.
+  /resource21:
+    get:
+      operationId: get_resource_21
+      description: Returns resource 21 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 21.
+  /resource22:
+    get:
+      operationId: get_resource_22
+      description: Returns resource 22 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 22.
+  /resource23:
+    get:
+      operationId: get_resource_23
+      description: Returns resource 23 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 23.
+  /resource24:
+    get:
+      operationId: get_resource_24
+      description: Returns resource 24 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 24.
+  /resource25:
+    get:
+      operationId: get_resource_25
+      description: Returns resource 25 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 25.
+  /resource26:
+    get:
+      operationId: get_resource_26
+      description: Returns resource 26 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 26.
+  /resource27:
+    get:
+      operationId: get_resource_27
+      description: Returns resource 27 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 27.
+  /resource28:
+    get:
+      operationId: get_resource_28
+      description: Returns resource 28 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 28.
+  /resource29:
+    get:
+      operationId: get_resource_29
+      description: Returns resource 29 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 29.
+  /resource30:
+    get:
+      operationId: get_resource_30
+      description: Returns resource 30 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 30.
+  /resource31:
+    get:
+      operationId: get_resource_31
+      description: Returns resource 31 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 31.
+  /resource32:
+    get:
+      operationId: get_resource_32
+      description: Returns resource 32 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 32.
+  /resource33:
+    get:
+      operationId: get_resource_33
+      description: Returns resource 33 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 33.
+  /resource34:
+    get:
+      operationId: get_resource_34
+      description: Returns resource 34 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 34.
+  /resource35:
+    get:
+      operationId: get_resource_35
+      description: Returns resource 35 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 35.
+  /resource36:
+    get:
+      operationId: get_resource_36
+      description: Returns resource 36 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 36.
+  /resource37:
+    get:
+      operationId: get_resource_37
+      description: Returns resource 37 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 37.
+  /resource38:
+    get:
+      operationId: get_resource_38
+      description: Returns resource 38 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 38.
+  /resource39:
+    get:
+      operationId: get_resource_39
+      description: Returns resource 39 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 39.
+  /resource40:
+    get:
+      operationId: get_resource_40
+      description: Returns resource 40 with all of its descriptive fields fully populated.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Resource 40.

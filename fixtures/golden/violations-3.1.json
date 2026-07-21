@@ -1,0 +1,43 @@
+{
+  "version": "3.1",
+  "halted": false,
+  "summary": {
+    "total": 6,
+    "errors": 0,
+    "warnings": 6,
+    "info": 0
+  },
+  "healthScore": 82,
+  "findings": [
+    {
+      "rule": "info-contact",
+      "severity": "warning",
+      "path": "info"
+    },
+    {
+      "rule": "info-description",
+      "severity": "warning",
+      "path": "info"
+    },
+    {
+      "rule": "mcp-nullable-deprecated",
+      "severity": "warning",
+      "path": "paths//things/get/responses/200/content/application/json/schema/properties/name/nullable"
+    },
+    {
+      "rule": "oas3-api-servers",
+      "severity": "warning",
+      "path": ""
+    },
+    {
+      "rule": "operation-tags",
+      "severity": "warning",
+      "path": "paths//things/get"
+    },
+    {
+      "rule": "owasp-no-security-schemes",
+      "severity": "warning",
+      "path": ""
+    }
+  ]
+}

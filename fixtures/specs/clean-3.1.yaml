@@ -1,0 +1,46 @@
+openapi: 3.1.0
+info:
+  title: Users API
+  version: 1.0.0
+  description: A small, well-formed API used as a clean 3.1 baseline fixture.
+servers:
+  - url: https://api.example.com
+tags:
+  - name: users
+    description: User management operations.
+paths:
+  /users:
+    get:
+      operationId: list_users
+      summary: List users
+      description: Returns the list of users in the account, newest first, with pagination support.
+      tags:
+        - users
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: A page of users with pagination metadata.
+                properties:
+                  items:
+                    type: array
+                    description: The users on this page.
+                    items:
+                      $ref: '#/components/schemas/User'
+components:
+  schemas:
+    User:
+      type: object
+      description: A user account.
+      properties:
+        id:
+          type: string
+          description: The unique user identifier.
+        email:
+          type:
+            - string
+            - 'null'
+          description: The user's email address, or null if not provided.

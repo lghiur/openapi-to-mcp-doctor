@@ -1,0 +1,23 @@
+{
+  "version": "3.0",
+  "halted": false,
+  "summary": {
+    "total": 2,
+    "errors": 0,
+    "warnings": 2,
+    "info": 0
+  },
+  "healthScore": 94,
+  "findings": [
+    {
+      "rule": "info-contact",
+      "severity": "warning",
+      "path": "info"
+    },
+    {
+      "rule": "owasp-no-security-schemes",
+      "severity": "warning",
+      "path": "components"
+    }
+  ]
+}

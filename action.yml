@@ -1,0 +1,94 @@
+# MCP Doctor GitHub Action — behavior ladder (docs/ideas/github-action-pr-mode.md).
+#
+# Required workflow permissions per behavior level (cumulative):
+#   summary  → contents: read
+#   comment  → + pull-requests: write
+#   review   → + pull-requests: write
+#   fix-pr   → + contents: write, pull-requests: write
+#
+# Trigger with the closed event so the stacked fix PR is re-pointed/closed
+# when the source PR closes:
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, closed]
+#
+# Use actions/checkout with fetch-depth: 0 so the base branch is available
+# for delta gating. Fork PRs degrade automatically to `summary`.
+name: 'MCP Doctor'
+description: 'Analyze an OpenAPI spec for MCP/LLM-agent usability: Job Summary, PR comments, inline review, stacked fix PRs.'
+author: 'Tyk Technologies'
+branding:
+  icon: 'activity'
+  color: 'purple'
+
+inputs:
+  spec:
+    description: 'Path to the OpenAPI spec file (YAML or JSON). Omit to auto-detect an openapi/swagger file in the workspace.'
+    required: false
+  behavior:
+    description: 'PR behavior ladder: summary | comment | review | fix-pr (each level cumulative).'
+    required: false
+    default: 'comment'
+  github-token:
+    description: 'Token for PR comments/reviews/fix PRs. Defaults to the workflow token.'
+    required: false
+    default: '${{ github.token }}'
+  mode:
+    description: 'Non-PR runs only: lint reports findings; fix applies eligible fixes in place (rewrites the spec file in the workspace for a later step to commit/artifact). PR runs use `behavior` instead.'
+    required: false
+    default: 'lint'
+  bot-login:
+    description: 'GitHub login that owns MCP Doctor comments (ownership check besides any *[bot] account). Set when using a non-default token. Default: github-actions[bot].'
+    required: false
+  confidence-threshold:
+    description: 'Fix-mode confidence gate: high | medium | low. LOW auto-applies spec/code mismatches — prominent warning emitted.'
+    required: false
+    default: 'high'
+  mismatch-mode:
+    description: 'flag | fix (v2 codebase grounding).'
+    required: false
+    default: 'flag'
+  llm-base-url:
+    description: 'OpenAI-compatible base URL for AI-powered analysis.'
+    required: false
+  llm-api-token:
+    description: 'API token for the LLM endpoint (never logged).'
+    required: false
+  route-paths:
+    description: 'Comma-separated handler/route paths for codebase grounding. Omit to auto-discover in the workspace.'
+    required: false
+  mcp-version:
+    description: 'MCP spec version to target.'
+    required: false
+    default: '2025-11-25'
+  fail-on:
+    description: 'CI gate: error | warning | never. Default: error on non-PR runs; never (advisory) on PR runs, where the gate counts only findings new in the PR.'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Install dependencies
+      shell: bash
+      run: npm ci --prefix ${{ github.action_path }}
+    - name: Run MCP Doctor
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        INPUT_SPEC: ${{ inputs.spec }}
+        INPUT_BEHAVIOR: ${{ inputs.behavior }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_BOT_LOGIN: ${{ inputs.bot-login }}
+        INPUT_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
+        INPUT_MISMATCH_MODE: ${{ inputs.mismatch-mode }}
+        INPUT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        INPUT_LLM_API_TOKEN: ${{ inputs.llm-api-token }}
+        INPUT_ROUTE_PATHS: ${{ inputs.route-paths }}
+        INPUT_MCP_VERSION: ${{ inputs.mcp-version }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+      run: node --import tsx ${{ github.action_path }}/cli/action.ts

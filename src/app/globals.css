@@ -1,0 +1,235 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system — "diagnostic console".
+ * Dark-first, oklch color space, indigo accent, semantic severity ramp.
+ * Light theme is a clean inversion. Tokens are mapped into Tailwind via
+ * @theme inline so utilities like bg-card / text-muted-foreground work.
+ */
+
+:root {
+  --radius: 0.75rem;
+
+  /* Light theme */
+  --background: oklch(0.99 0.002 250);
+  --foreground: oklch(0.21 0.02 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 264);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 264);
+  --primary: oklch(0.55 0.22 277);
+  --primary-foreground: oklch(0.99 0.005 277);
+  --secondary: oklch(0.96 0.01 264);
+  --secondary-foreground: oklch(0.28 0.03 264);
+  --muted: oklch(0.96 0.006 264);
+  --muted-foreground: oklch(0.52 0.02 264);
+  --accent: oklch(0.95 0.02 277);
+  --accent-foreground: oklch(0.32 0.08 277);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.99 0.01 27);
+  --border: oklch(0.91 0.01 264);
+  --input: oklch(0.91 0.01 264);
+  --ring: oklch(0.55 0.22 277);
+
+  /* Semantic severity ramp */
+  --error: oklch(0.58 0.22 27);
+  --warning: oklch(0.72 0.16 75);
+  --info: oklch(0.62 0.16 245);
+  --success: oklch(0.62 0.16 155);
+
+  /* Surfaces & effects */
+  --surface-1: oklch(0.98 0.003 264);
+  --surface-2: oklch(0.96 0.006 264);
+  --glow: oklch(0.55 0.22 277 / 0.35);
+}
+
+.dark {
+  --background: oklch(0.16 0.012 274);
+  --foreground: oklch(0.96 0.006 264);
+  --card: oklch(0.2 0.014 274);
+  --card-foreground: oklch(0.96 0.006 264);
+  --popover: oklch(0.19 0.014 274);
+  --popover-foreground: oklch(0.96 0.006 264);
+  --primary: oklch(0.67 0.18 277);
+  --primary-foreground: oklch(0.16 0.02 277);
+  --secondary: oklch(0.27 0.02 274);
+  --secondary-foreground: oklch(0.92 0.01 264);
+  --muted: oklch(0.25 0.016 274);
+  --muted-foreground: oklch(0.68 0.02 270);
+  --accent: oklch(0.3 0.04 277);
+  --accent-foreground: oklch(0.92 0.03 277);
+  --destructive: oklch(0.65 0.2 25);
+  --destructive-foreground: oklch(0.98 0.01 25);
+  --border: oklch(0.3 0.018 274);
+  --input: oklch(0.32 0.02 274);
+  --ring: oklch(0.67 0.18 277);
+
+  --error: oklch(0.68 0.2 25);
+  --warning: oklch(0.79 0.15 78);
+  --info: oklch(0.7 0.15 245);
+  --success: oklch(0.72 0.15 158);
+
+  --surface-1: oklch(0.22 0.015 274);
+  --surface-2: oklch(0.25 0.018 274);
+  --glow: oklch(0.67 0.18 277 / 0.45);
+}
+
+/*
+ * Tyk-inspired presentation theme — scoped, not global.
+ * Wrapping a subtree in `.theme-tyk` re-points the SAME design-system tokens the
+ * whole component library already reads (bg-primary, text-muted-foreground,
+ * border-border, bg-card …), so every existing component reskins with zero edits.
+ * Always dark. APPROXIMATE Tyk brand — swap the four brand hexes below for the
+ * exact palette and the entire page follows.
+ */
+.theme-tyk {
+  /* --- Tyk brand hexes (swap these four) ------------------------------- */
+  --tyk-green: #00d68f; /* signature accent */
+  --tyk-green-soft: #7cf0c4; /* lighter accent text */
+  --tyk-coral: #ff6b5d; /* secondary / destructive */
+  --tyk-ink: #070b0a; /* near-black green-tinted base */
+  /* -------------------------------------------------------------------- */
+
+  --background: var(--tyk-ink);
+  --foreground: #e6efea;
+  --card: #0f1613;
+  --card-foreground: #e6efea;
+  --popover: #0f1613;
+  --popover-foreground: #e6efea;
+  --primary: var(--tyk-green);
+  --primary-foreground: #04150f;
+  --secondary: #16211c;
+  --secondary-foreground: #cfe0d8;
+  --muted: #131c18;
+  --muted-foreground: #82968c;
+  --accent: #16241d;
+  --accent-foreground: var(--tyk-green-soft);
+  --destructive: var(--tyk-coral);
+  --destructive-foreground: #1a0906;
+  --border: #1c2a24;
+  --input: #22332b;
+  --ring: var(--tyk-green);
+
+  --error: var(--tyk-coral);
+  --warning: oklch(0.79 0.15 78);
+  --info: #38d6c0;
+  --success: var(--tyk-green);
+
+  --surface-1: #0c1310;
+  --surface-2: #101a15;
+  --glow: color-mix(in oklch, var(--tyk-green) 40%, transparent);
+
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+@theme inline {
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) - 8px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-error: var(--error);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-success: var(--success);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, 'SF Mono', monospace;
+
+  --animate-fade-in: fade-in 0.4s ease forwards;
+  --animate-rise: rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-shimmer: shimmer 2s linear infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    color-scheme: light dark;
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background-color: oklch(0.67 0.18 277 / 0.3);
+  }
+}
+
+@layer utilities {
+  /* Tabular figures for metrics so numbers don't jitter */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Subtle dotted grid backdrop for hero / empty states */
+  .bg-grid {
+    background-image: radial-gradient(var(--color-border) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .glow-primary {
+    box-shadow: 0 0 0 1px var(--glow), 0 8px 40px -12px var(--glow);
+  }
+  .animate-rise {
+    animation: var(--animate-rise);
+  }
+  .animate-fade-in {
+    animation: var(--animate-fade-in);
+  }
+}

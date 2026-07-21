@@ -1,0 +1,32 @@
+# Continuous dogfooding gate + standard checks (Architecture Decision 8).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      # Dogfood gate: fail on a health-score regression or spec/handler drift.
+      # With LLM_* secrets configured, the drift check is a real grounded run
+      # (every documented operation checked against its route handler for
+      # SPEC_CODE_MISMATCH); without them it degrades to a handler-file
+      # existence check.
+      - run: npm run dogfood
+        env:
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_TOKEN: ${{ secrets.LLM_API_TOKEN }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}

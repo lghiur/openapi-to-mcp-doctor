@@ -1,0 +1,29 @@
+openapi: 3.1.0
+info:
+  title: Bad API 3.1
+  version: 1.0.0
+paths:
+  /things:
+    get:
+      operationId: list_things
+      description: Returns things in the account with pagination and filtering supported here.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                description: A page of things.
+                properties:
+                  name:
+                    type: string
+                    nullable: true
+                    description: The thing name.
+                  tags:
+                    type: array
+                    description: The thing tags.
+                    items:
+                      type: string
+                      examples:
+                        - hello

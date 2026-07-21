@@ -1,0 +1,42 @@
+openapi: 3.0.3
+info:
+  title: Bad API
+  version: 1.0.0
+paths:
+  /users/{id}:
+    get:
+      operationId: GetUser
+      description: GET /users/{id}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+    post:
+      description: Creates.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - a
+                      - b

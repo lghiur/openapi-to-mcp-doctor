@@ -1,0 +1,470 @@
+openapi: 3.1.0
+info:
+  title: OpenAPI MCP Doctor API
+  version: 0.1.0
+  description: >
+    The HTTP API this application exposes. Hand-maintained and run through MCP
+    Doctor itself (dogfooding) so spec drift from the handlers is caught in CI.
+  contact:
+    name: Tyk Technologies
+    url: https://github.com/TykTechnologies/openapi-to-mcp-doctor
+servers:
+  - url: http://localhost:3000
+tags:
+  - name: analysis
+    description: Create and stream OpenAPI analysis jobs.
+  - name: github
+    description: Turn accepted fixes into GitHub pull requests.
+  - name: history
+    description: Persisted run records and finding resolutions.
+paths:
+  /api/analyze:
+    post:
+      operationId: create_analysis_job
+      summary: Create an analysis job
+      description: >
+        Validate a pasted OpenAPI spec and create an analysis job. Use this first;
+        then open the SSE stream with stream_analysis_events to receive findings.
+        Returns the new job id.
+      tags:
+        - analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The spec to analyze and the desired mode.
+              required:
+                - spec
+              properties:
+                spec:
+                  type: string
+                  description: The raw OpenAPI 3.0 or 3.1 document (YAML or JSON).
+                mode:
+                  type: string
+                  description: Whether to lint (report) or fix (apply) findings.
+                  enum:
+                    - lint
+                    - fix
+                mismatchMode:
+                  type: string
+                  description: Whether spec/code mismatches are reported or made appliable.
+                  enum:
+                    - flag
+                    - fix
+                confidenceThreshold:
+                  type: string
+                  description: Confidence gate for fixes applied in fix mode.
+                  enum:
+                    - high
+                    - medium
+                    - low
+                selection:
+                  type: array
+                  description: >
+                    Paths and methods to analyse; omit to analyse the whole spec.
+                    Findings outside the selection are dropped.
+                  items:
+                    type: object
+                    description: One selected path and its chosen methods.
+                    required:
+                      - path
+                      - methods
+                    properties:
+                      path:
+                        type: string
+                        description: The spec path, e.g. /users/{id}.
+                      methods:
+                        type: array
+                        description: Lowercase HTTP methods selected under the path.
+                        items:
+                          type: string
+                          description: An HTTP method, e.g. get.
+      responses:
+        '200':
+          description: The created job id.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The identifier of the created analysis job.
+                properties:
+                  jobId:
+                    type: string
+                    description: The id used to open the analysis stream.
+        '400':
+          description: The body is not valid JSON or fails schema validation.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+  /api/jobs/{id}/stream:
+    get:
+      operationId: stream_analysis_events
+      summary: Stream analysis events
+      description: >
+        Open a Server-Sent Events stream for a job. Use this immediately after
+        create_analysis_job; events arrive as findings are produced and end with
+        an analysis_complete event. Returns a text/event-stream response.
+      tags:
+        - analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The analysis job id returned by create_analysis_job.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A text/event-stream of analysis events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Newline-delimited SSE frames.
+        '404':
+          description: No job exists with the given id.
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: A plain-text error message.
+  /api/jobs/{id}/patch:
+    post:
+      operationId: download_patched_spec
+      summary: Download a patched spec
+      description: >
+        Apply accepted (or all eligible) fixes to a job's spec and return the
+        patched document for download. Use this after reviewing suggestions from
+        stream_analysis_events. Returns the patched spec as an attachment.
+      tags:
+        - analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The analysis job id whose spec should be patched.
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Which findings to apply and at what confidence threshold.
+              properties:
+                acceptedIds:
+                  type: array
+                  description: Finding ids to apply; omit to apply all eligible fixes.
+                  items:
+                    type: string
+                    description: A finding id from the analysis stream.
+                threshold:
+                  type: string
+                  description: Confidence gate for applied fixes.
+                  enum:
+                    - high
+                    - medium
+                    - low
+      responses:
+        '200':
+          description: The patched spec as a downloadable attachment.
+          headers:
+            Content-Disposition:
+              description: Attachment disposition with the filename openapi.patched.yaml.
+              schema:
+                type: string
+                description: The attachment disposition header value.
+            X-Fixes-Applied:
+              description: How many fixes were applied to the returned document.
+              schema:
+                type: string
+                description: The applied-fix count as a decimal string.
+            X-Fixes-Skipped:
+              description: How many eligible fixes were skipped by the confidence gate.
+              schema:
+                type: string
+                description: The skipped-fix count as a decimal string.
+            X-Fixes-Verified:
+              description: How many applied fixes the post-fix re-lint confirmed resolved.
+              schema:
+                type: string
+                description: The verified-resolved count as a decimal string.
+            X-Fixes-Unresolved:
+              description: How many applied fixes the re-lint still reports on the patched document.
+              schema:
+                type: string
+                description: The unresolved count as a decimal string.
+            X-Fixes-Regressions:
+              description: How many new findings the applied fixes introduced.
+              schema:
+                type: string
+                description: The regression count as a decimal string.
+          content:
+            text/yaml:
+              schema:
+                type: string
+                description: The patched OpenAPI document.
+        '400':
+          description: The job's spec could not be analyzed.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+        '404':
+          description: No job exists with the given id.
+        '422':
+          description: >
+            The applied fixes produced an invalid OpenAPI document — the patch
+            was rejected and no document is returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The rejection reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+          content:
+            text/plain:
+              schema:
+                type: string
+                description: A plain-text error message.
+  /api/jobs/{id}/cancel:
+    post:
+      operationId: cancel_analysis_job
+      summary: Cancel a running analysis job
+      description: >
+        Abort a job's in-flight analysis stream and mark it cancelled. Use this
+        when the user abandons a run started with create_analysis_job; completed
+        jobs are left untouched. Returns whether the job existed.
+      tags:
+        - analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The analysis job id to cancel.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The cancellation outcome.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Whether the job was cancelled.
+                required:
+                  - cancelled
+                properties:
+                  cancelled:
+                    type: boolean
+                    description: Always true — a missing job yields a 404 instead.
+        '404':
+          description: No job exists with the given id.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+  /api/github/pr:
+    post:
+      operationId: create_fix_pr
+      summary: Open a fix pull request
+      description: >
+        Commit the patched spec of a repo-sourced job on a new branch and open a
+        GitHub pull request with the accepted fixes. Use this after reviewing
+        suggestions when the job came from a connected repository; requires a
+        signed-in session and at least one accepted finding. Returns the PR link.
+      tags:
+        - github
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The job whose accepted fixes should become a PR.
+              required:
+                - jobId
+                - acceptedIds
+              properties:
+                jobId:
+                  type: string
+                  description: The analysis job id returned by create_analysis_job.
+                acceptedIds:
+                  type: array
+                  description: The finding ids the user accepted; must not be empty.
+                  items:
+                    type: string
+                    description: A finding id from the analysis stream.
+      responses:
+        '200':
+          description: The opened pull request.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Where the fix PR lives on GitHub.
+                required:
+                  - url
+                  - number
+                properties:
+                  url:
+                    type: string
+                    description: The pull request's HTML URL.
+                  number:
+                    type: integer
+                    description: The pull request number.
+        '400':
+          description: >
+            The request cannot produce a PR — the job is not connected to a
+            repository, no findings were accepted, the spec could not be
+            analyzed, or none of the accepted findings had an applicable fix.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+        '401':
+          description: No authenticated session with a GitHub token.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+        '404':
+          description: No job exists with the given id.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+        '502':
+          description: GitHub rejected the branch, commit, or PR creation.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+  /api/runs/{id}/resolution:
+    post:
+      operationId: update_finding_resolution
+      summary: Record a finding resolution
+      description: >
+        Record the user's accept, reject, or edit decision on a persisted run's
+        finding — the only mutation allowed on history records after a run
+        completes. Use this as decisions are made in the review UI. Returns a
+        confirmation.
+      tags:
+        - history
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The persisted run id (same as the analysis job id).
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The finding and the decision to record.
+              required:
+                - findingId
+                - resolution
+              properties:
+                findingId:
+                  type: string
+                  description: The finding id whose resolution changed.
+                resolution:
+                  type: string
+                  description: The user's decision on the finding.
+                  enum:
+                    - accepted
+                    - rejected
+                    - edited
+                    - auto-fixed
+                    - pending
+      responses:
+        '200':
+          description: Confirmation that the resolution was recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Acknowledgement of the update.
+                properties:
+                  ok:
+                    type: boolean
+                    description: Always true on success.
+        '400':
+          description: The finding id or resolution value is missing or invalid.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+        '401':
+          description: No authenticated session.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.
+        '404':
+          description: No persisted run exists with the given id.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The failure reason.
+                properties:
+                  error:
+                    type: string
+                    description: Human-readable error message.

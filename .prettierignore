@@ -1,0 +1,9 @@
+node_modules
+.next
+coverage
+dist
+*.lock
+package-lock.json
+
+# Hand-authored design/research docs with intentional tables and ASCII mocks.
+docs/

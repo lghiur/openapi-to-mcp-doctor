@@ -1,0 +1,18 @@
+{
+  "version": null,
+  "halted": true,
+  "summary": {
+    "total": 1,
+    "errors": 1,
+    "warnings": 0,
+    "info": 0
+  },
+  "healthScore": 90,
+  "findings": [
+    {
+      "rule": "SWAGGER_20_NOT_SUPPORTED",
+      "severity": "error",
+      "path": ""
+    }
+  ]
+}
