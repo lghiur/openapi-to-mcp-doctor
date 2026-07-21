@@ -28,6 +28,7 @@ import {
   deltaGateSummary,
   findingMarkerKey,
   inlineCommentBody,
+  isPrCreationForbidden,
   isSafeGitRef,
   locateFindings,
   parseAppliedFixCount,
@@ -450,20 +451,34 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
 
     // fix-pr level: stacked PR carrying the patched spec — or, when this push
     // left nothing to patch, close the now-obsolete fix PR from earlier pushes.
+    let fixPrForbidden = false
     if (behavior === 'fix-pr') {
       if (patched !== undefined && patched !== headSpecText) {
-        fixPr = await ensureStackedFixPr(stackedPrApi(octokit), {
-          owner: ctx.owner,
-          repo: ctx.repo,
-          sourceBranch: ctx.headRef,
-          specPath,
-          patchedContent: patched,
-          title: `MCP Doctor: spec fixes for ${ctx.headRef}`,
-          body:
-            `Automated OpenAPI spec fixes for #${ctx.prNumber} (confidence threshold: ` +
-            `\`${confidenceThreshold}\`). Merge this into \`${ctx.headRef}\` to apply them.\n\n` +
-            '🤖 Opened by [MCP Doctor](https://github.com/TykTechnologies/openapi-to-mcp-doctor)',
-        })
+        try {
+          fixPr = await ensureStackedFixPr(stackedPrApi(octokit), {
+            owner: ctx.owner,
+            repo: ctx.repo,
+            sourceBranch: ctx.headRef,
+            specPath,
+            patchedContent: patched,
+            title: `MCP Doctor: spec fixes for ${ctx.headRef}`,
+            body:
+              `Automated OpenAPI spec fixes for #${ctx.prNumber} (confidence threshold: ` +
+              `\`${confidenceThreshold}\`). Merge this into \`${ctx.headRef}\` to apply them.\n\n` +
+              '🤖 Opened by [MCP Doctor](https://github.com/TykTechnologies/openapi-to-mcp-doctor)',
+          })
+        } catch (error) {
+          // Repo hasn't enabled "Allow GitHub Actions to create and approve
+          // pull requests" — degrade to review level instead of failing.
+          if (!isPrCreationForbidden(error)) throw error
+          fixPrForbidden = true
+          process.stdout.write(
+            '::warning::MCP Doctor: behavior "fix-pr" requested, but this repository does not ' +
+              'allow GitHub Actions to create pull requests. Enable it under Settings → Actions → ' +
+              'General → "Allow GitHub Actions to create and approve pull requests". ' +
+              'Continuing at "review" level.\n',
+          )
+        }
       } else {
         const outcome = await closeFixPrIfObsolete(stackedPrApi(octokit), {
           owner: ctx.owner,
@@ -490,6 +505,12 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
       skippedInline,
       jobSummaryUrl: jobSummaryUrl(process.env),
     })
+    if (fixPrForbidden) {
+      body +=
+        '\n> ⚠️ **Fix PR unavailable** — this repository does not allow GitHub Actions to ' +
+        'create pull requests. Enable it under *Settings → Actions → General → “Allow GitHub ' +
+        'Actions to create and approve pull requests”* to receive automated spec-fix PRs.\n'
+    }
     if (behavior === 'fix-pr' && confidenceThreshold === 'low') {
       body +=
         '\n> ⚠️ **AGGRESSIVE MODE** — the fix PR includes LOW-confidence fixes ' +

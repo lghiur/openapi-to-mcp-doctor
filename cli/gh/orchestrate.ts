@@ -100,6 +100,21 @@ export function renamedFrom(nameStatus: string, headPath: string): string | unde
   return undefined
 }
 
+/**
+ * The consumer repo hasn't enabled "Allow GitHub Actions to create and approve
+ * pull requests" (Settings → Actions → General). A normal condition across
+ * GitHub, not a failure: fix-pr degrades to review with a notice.
+ */
+export function isPrCreationForbidden(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const { status, message } = error as { status?: unknown; message?: unknown }
+  return (
+    status === 403 &&
+    typeof message === 'string' &&
+    message.includes('not permitted to create or approve pull requests')
+  )
+}
+
 /** Applied-fix count from a fix-mode scan's stdout ("Applied N fix(es), …"). */
 export function parseAppliedFixCount(fixStdout: string): number | undefined {
   const match = /Applied (\d+) fix\(es\)/.exec(fixStdout)

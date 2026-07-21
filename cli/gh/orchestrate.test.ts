@@ -7,6 +7,7 @@ import {
   deltaGateSummary,
   findingMarkerKey,
   inlineCommentBody,
+  isPrCreationForbidden,
   isSafeGitRef,
   locateFindings,
   mdCell,
@@ -332,5 +333,19 @@ describe('renderNewFindingsSection', () => {
 
   it('says so when the PR introduces nothing new', () => {
     expect(renderNewFindingsSection([])).toContain('No new findings')
+  })
+})
+
+describe('isPrCreationForbidden', () => {
+  it('matches the 403 "not permitted to create or approve pull requests" error', () => {
+    const err = Object.assign(new Error('GitHub Actions is not permitted to create or approve pull requests.'), { status: 403 })
+    expect(isPrCreationForbidden(err)).toBe(true)
+  })
+
+  it('rejects other 403s, other statuses, and non-errors', () => {
+    expect(isPrCreationForbidden(Object.assign(new Error('Resource not accessible by integration'), { status: 403 }))).toBe(false)
+    expect(isPrCreationForbidden(Object.assign(new Error('GitHub Actions is not permitted to create or approve pull requests.'), { status: 422 }))).toBe(false)
+    expect(isPrCreationForbidden(new Error('boom'))).toBe(false)
+    expect(isPrCreationForbidden(undefined)).toBe(false)
   })
 })
