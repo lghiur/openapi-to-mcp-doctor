@@ -20,6 +20,7 @@ import {
   renamedFrom,
   renderNewFindingsSection,
   resolveGithubToken,
+  selectionFromFindings,
 } from './orchestrate'
 
 function finding(overrides: Partial<ReportFinding> = {}): ReportFinding {
@@ -275,6 +276,44 @@ describe('renamedFrom', () => {
     expect(renamedFrom(nameStatus, 'src/main.go')).toBeUndefined()
     expect(renamedFrom(nameStatus, 'api/openapi.yaml')).toBeUndefined()
     expect(renamedFrom('', 'spec/openapi.yaml')).toBeUndefined()
+  })
+})
+
+describe('selectionFromFindings', () => {
+  it('parses operations and merges methods per path', () => {
+    const selection = selectionFromFindings([
+      finding({ id: 'a', operation: 'GET /tyk/debug/goroutine-count' }),
+      finding({ id: 'b', operation: 'POST /tyk/debug/goroutine-count' }),
+      finding({ id: 'c', operation: 'GET /tyk/keys' }),
+    ])
+    expect(selection).toEqual([
+      { path: '/tyk/debug/goroutine-count', methods: ['get', 'post'] },
+      { path: '/tyk/keys', methods: ['get'] },
+    ])
+  })
+
+  it('lowercases methods and deduplicates repeats', () => {
+    const selection = selectionFromFindings([
+      finding({ id: 'a', operation: 'GET /users' }),
+      finding({ id: 'b', operation: 'get /users' }),
+    ])
+    expect(selection).toEqual([{ path: '/users', methods: ['get'] }])
+  })
+
+  it('skips findings without a parsable operation', () => {
+    const selection = selectionFromFindings([
+      finding({ id: 'a' }), // no operation at all
+      finding({ id: 'b', operation: 'document' }), // no method + path shape
+      finding({ id: 'c', operation: 'FROBNICATE /users' }), // not an HTTP method
+      finding({ id: 'd', operation: 'GET users' }), // path must start with /
+      finding({ id: 'e', operation: 'DELETE /users/{id}' }),
+    ])
+    expect(selection).toEqual([{ path: '/users/{id}', methods: ['delete'] }])
+  })
+
+  it('returns undefined when nothing is parsable (caller skips the fix pass)', () => {
+    expect(selectionFromFindings([])).toBeUndefined()
+    expect(selectionFromFindings([finding({ operation: 'document' })])).toBeUndefined()
   })
 })
 

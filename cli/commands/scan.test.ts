@@ -1,7 +1,8 @@
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse as parseYaml } from 'yaml'
 import type { AiCapability } from '@/lib/engine'
 import { AnalysisReportSchema } from '@/types/api'
 import type { Finding } from '@/types/domain'
@@ -160,6 +161,83 @@ describe('runScan — fix mode', () => {
     })
     expect(result.exitCode).toBe(2)
     expect(result.stdout).toMatch(/verification failed/i)
+  })
+})
+
+describe('runScan — operation selection', () => {
+  // Two operations, both with a HIGH-confidence fixable violation (PascalCase
+  // operationId) — the discriminator for "only the selected one is patched".
+  const TWO_OP_SPEC = `openapi: 3.0.3
+info:
+  title: T
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      operationId: ListUsers
+      description: Returns the users of the account, newest first.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+  /items:
+    get:
+      operationId: ListItems
+      description: Returns the items of the account, newest first.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+`
+
+  async function twoOpSpecFile(): Promise<string> {
+    const specPath = join(tmpdir(), `mcp-doctor-two-op-${process.pid}-${Math.random()}.yaml`)
+    tmpFiles.push(specPath)
+    await writeFile(specPath, TWO_OP_SPEC)
+    return specPath
+  }
+
+  it('fix mode with a selection patches only the selected operation', async () => {
+    const specPath = await twoOpSpecFile()
+    const out = join(tmpdir(), `mcp-doctor-selected-fix-${process.pid}.yaml`)
+    tmpFiles.push(out)
+    const result = await runScan({
+      specPath,
+      mode: 'fix',
+      confidenceThreshold: 'high',
+      outputPath: out,
+      selection: [{ path: '/users', methods: ['get'] }],
+    })
+    expect(result.exitCode).toBe(0)
+    const patched = parseYaml(await readFile(out, 'utf8')) as {
+      paths: Record<string, { get: { operationId: string } }>
+    }
+    // selected operation fixed…
+    expect(patched.paths['/users']?.get.operationId).toBe('list_users')
+    // …the unselected operation's violation remains untouched
+    expect(patched.paths['/items']?.get.operationId).toBe('ListItems')
+  })
+
+  it('lint mode with a selection drops findings on unselected operations', async () => {
+    const specPath = await twoOpSpecFile()
+    const result = await runScan({
+      specPath,
+      json: true,
+      selection: [{ path: '/users', methods: ['get'] }],
+    })
+    const report = JSON.parse(result.stdout) as {
+      findings: Array<{ operation?: string; path?: Array<string | number> }>
+    }
+    const onUsers = report.findings.filter((f) => f.path?.includes('/users'))
+    expect(onUsers.length).toBeGreaterThan(0)
+    expect(report.findings.some((f) => f.path?.includes('/items'))).toBe(false)
+    expect(report.findings.some((f) => f.operation === 'GET /items')).toBe(false)
   })
 })
 

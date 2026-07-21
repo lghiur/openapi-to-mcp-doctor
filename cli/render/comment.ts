@@ -37,6 +37,11 @@ export interface StickyCommentParams {
   /** Review comments that could not be placed on a diff line. */
   skippedInline?: number
   jobSummaryUrl?: string
+  /**
+   * What the fix PR covers: 'pr' = only operations with findings introduced by
+   * this PR (the default), 'full' = the whole spec's debt. Omitted = no clause.
+   */
+  fixScope?: 'pr' | 'full'
 }
 
 /** `72 → 68 ▼`, or empty when either side of the delta is missing. */
@@ -68,7 +73,8 @@ ${rows.join('\n')}`
 
 /** Render the marker-identified sticky PR comment (updated in place on each push). */
 export function renderStickyComment(params: StickyCommentParams): string {
-  const { delta, direction, report, fixPr, appliedFixCount, skippedInline, jobSummaryUrl } = params
+  const { delta, direction, report, fixPr, appliedFixCount, skippedInline, jobSummaryUrl, fixScope } =
+    params
 
   const health = healthDelta(delta)
   const header = health ? `## MCP Doctor — ${health}` : '## MCP Doctor'
@@ -87,8 +93,10 @@ export function renderStickyComment(params: StickyCommentParams): string {
 
   if (fixPr) {
     const n = appliedFixCount ?? report.summary.autoFixed
+    const scope =
+      fixScope === 'pr' ? " (scoped to this PR's changes)" : fixScope === 'full' ? ' (whole spec)' : ''
     sections.push(
-      `> 🔧 **${n} ${n === 1 ? 'fix' : 'fixes'} ready** — merge [#${fixPr.number}](${fixPr.url}) into your branch to apply them.`,
+      `> 🔧 **${n} ${n === 1 ? 'fix' : 'fixes'} ready**${scope} — merge [#${fixPr.number}](${fixPr.url}) into your branch to apply them.`,
     )
   }
 

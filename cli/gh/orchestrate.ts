@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { resolveSpecLine } from '@/lib/engine/lines/resolve'
 import type { ReportFinding } from '@/types/api'
+import type { OperationSelection } from '@/types/domain'
 import type { FailOn } from '../render/summary'
 import { findingKey } from './delta'
 import { BEHAVIORS, type Behavior, type DirectionResult, type LocatedFinding } from './types'
@@ -126,6 +127,41 @@ export function extractAgentFailures(stderr: string): string[] {
     .filter((line) => line.startsWith('✗ '))
     .map((line) => line.slice(2).trim())
     .filter((line) => line.length > 0)
+}
+
+const HTTP_METHODS = new Set([
+  'get',
+  'put',
+  'post',
+  'delete',
+  'options',
+  'head',
+  'patch',
+  'trace',
+])
+
+/**
+ * Build an engine `OperationSelection` from findings' operation labels
+ * ("GET /tyk/debug/goroutine-count" → `{ path, methods: ['get'] }`), merging
+ * methods per path. Findings without a parsable operation (document-level, or
+ * a label that isn't `METHOD /path`) are skipped; when nothing is parsable the
+ * result is undefined — the caller then has no operations to scope a fix to.
+ */
+export function selectionFromFindings(findings: ReportFinding[]): OperationSelection | undefined {
+  const byPath = new Map<string, Set<string>>()
+  for (const finding of findings) {
+    if (finding.operation === undefined) continue
+    const match = /^(\S+)\s+(\/\S*)$/.exec(finding.operation.trim())
+    if (!match) continue
+    const method = (match[1] as string).toLowerCase()
+    if (!HTTP_METHODS.has(method)) continue
+    const path = match[2] as string
+    const methods = byPath.get(path) ?? new Set<string>()
+    methods.add(method)
+    byPath.set(path, methods)
+  }
+  if (byPath.size === 0) return undefined
+  return [...byPath.entries()].map(([path, methods]) => ({ path, methods: [...methods] }))
 }
 
 /** Applied-fix count from a fix-mode scan's stdout ("Applied N fix(es), …"). */

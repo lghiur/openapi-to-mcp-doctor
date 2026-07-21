@@ -40,6 +40,7 @@ import {
   renamedFrom,
   renderNewFindingsSection,
   resolveGithubToken,
+  selectionFromFindings,
 } from './gh/orchestrate'
 import type { PrContext } from './gh/types'
 import { renderAnnotations } from './render/annotations'
@@ -61,6 +62,7 @@ const CONFIDENCE_VALUES = ['high', 'medium', 'low'] as const
 const MISMATCH_VALUES = ['flag', 'fix'] as const
 const FAIL_ON_VALUES = ['error', 'warning', 'never'] as const
 const MODE_VALUES = ['lint', 'fix'] as const
+const FIX_SCOPE_VALUES = ['pr', 'full'] as const
 
 function input(name: string): string | undefined {
   const value = process.env[`INPUT_${name.toUpperCase().replace(/-/g, '_')}`]
@@ -381,37 +383,60 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
     process.stdout.write(`::warning ::MCP Doctor AI agent ${failure}\n`)
   }
 
-  // fix-pr level: capture the patched spec from a fix-mode pass.
+  // Delta BEFORE the fix pass: PR-scoped fixing must know which findings this
+  // PR introduced. The head scan above already populated the sidecar cache, so
+  // running the fix pass after the delta costs no extra LLM work.
+  const delta = diffReports(baseReport, headReport)
+
+  // fix-pr level: capture the patched spec from a fix-mode pass. Default scope
+  // 'pr' fixes only the operations carrying findings this PR introduced —
+  // 'full' opts back into patching the whole spec's debt.
   const confidenceThreshold: ConfidenceThreshold =
     choiceInput('confidence-threshold', CONFIDENCE_VALUES) ?? 'high'
+  const fixScope = choiceInput('fix-scope', FIX_SCOPE_VALUES) ?? 'pr'
   let patched: string | undefined
   let appliedFixCount: number | undefined
   if (behavior === 'fix-pr') {
-    const patchedPath = path.join(scratchDir, `patched-${path.basename(specPath)}`)
-    const fixScan = await runScan({
-      specPath,
-      mode: 'fix',
-      confidenceThreshold,
-      mismatchMode,
-      outputPath: patchedPath,
-      mcpVersion,
-      routePaths,
-      ai,
-      cache: true,
-    })
-    if (fixScan.exitCode !== 2) {
-      patched = await readFile(patchedPath, 'utf8').catch(() => undefined)
-      appliedFixCount = parseAppliedFixCount(fixScan.stdout)
-    }
-    if (confidenceThreshold === 'low') {
+    const selection = fixScope === 'pr' ? selectionFromFindings(delta.newFindings) : undefined
+    if (fixScope === 'pr' && selection === undefined) {
+      // No PR-introduced finding is anchored to an operation — nothing in this
+      // PR's scope to fix. Skip the fix scan entirely; `patched` stays
+      // undefined, so the obsolete-fix-PR close path below takes over.
       process.stdout.write(
-        '::warning ::MCP Doctor AGGRESSIVE MODE — LOW-confidence fixes (including spec/code ' +
-          'mismatches) are auto-applied to the fix PR. Review every change before merging.\n',
+        'MCP Doctor: fix-scope is "pr" and this PR introduced no operation-level findings — ' +
+          'skipping the fix pass.\n',
       )
+    } else {
+      const patchedPath = path.join(scratchDir, `patched-${path.basename(specPath)}`)
+      // Cache note: the sidecar written by the head scan is keyed by spec hash
+      // alone and holds FULL-spec results; a selection-scoped fix run consumes
+      // it read-only (runScan narrows the cached findings to the selection and
+      // never writes scoped results back), so the cached AI analysis is still
+      // reused here without risking wrong full-spec reuse later.
+      const fixScan = await runScan({
+        specPath,
+        mode: 'fix',
+        confidenceThreshold,
+        mismatchMode,
+        outputPath: patchedPath,
+        mcpVersion,
+        routePaths,
+        ai,
+        cache: true,
+        ...(selection !== undefined ? { selection } : {}),
+      })
+      if (fixScan.exitCode !== 2) {
+        patched = await readFile(patchedPath, 'utf8').catch(() => undefined)
+        appliedFixCount = parseAppliedFixCount(fixScan.stdout)
+      }
+      if (confidenceThreshold === 'low') {
+        process.stdout.write(
+          '::warning ::MCP Doctor AGGRESSIVE MODE — LOW-confidence fixes (including spec/code ' +
+            'mismatches) are auto-applied to the fix PR. Review every change before merging.\n',
+        )
+      }
     }
   }
-
-  const delta = diffReports(baseReport, headReport)
 
   // Job Summary: full report (pre-existing debt lives here) + the delta section.
   await writeJobSummary(
@@ -474,7 +499,11 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
             title: `MCP Doctor: spec fixes for ${ctx.headRef}`,
             body:
               `Automated OpenAPI spec fixes for #${ctx.prNumber} (confidence threshold: ` +
-              `\`${confidenceThreshold}\`). Merge this into \`${ctx.headRef}\` to apply them.\n\n` +
+              `\`${confidenceThreshold}\`; ${
+                fixScope === 'pr'
+                  ? "scoped to operations with findings this PR introduced"
+                  : "whole spec"
+              }). Merge this into \`${ctx.headRef}\` to apply them.\n\n` +
               '🤖 Opened by [MCP Doctor](https://github.com/TykTechnologies/openapi-to-mcp-doctor)',
           })
         } catch (error) {
@@ -514,6 +543,7 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
       appliedFixCount,
       skippedInline,
       jobSummaryUrl: jobSummaryUrl(process.env),
+      fixScope,
     })
     if (agentFailures.length > 0) {
       const first = neutralizeMentions(agentFailures[0] ?? '')
@@ -580,6 +610,7 @@ async function main(): Promise<void> {
   choiceInput('confidence-threshold', CONFIDENCE_VALUES)
   choiceInput('mismatch-mode', MISMATCH_VALUES)
   choiceInput('fail-on', FAIL_ON_VALUES)
+  choiceInput('fix-scope', FIX_SCOPE_VALUES)
 
   // Surface LLM creds (provided as action inputs) to the engine's env contract.
   const baseUrl = input('llm-base-url')

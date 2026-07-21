@@ -83,6 +83,88 @@ describe('runScan — sidecar cache wiring', () => {
   })
 })
 
+describe('runScan — sidecar cache with an operation selection', () => {
+  const TWO_OP_SPEC = `openapi: 3.0.3
+info:
+  title: T
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      operationId: list_users
+      description: Returns the users of the account, newest first, with pagination.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+  /items:
+    get:
+      operationId: list_items
+      description: Returns the items of the account, newest first, with pagination.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+`
+
+  async function twoOpTempDir(): Promise<{ dir: string; specPath: string }> {
+    const dir = await mkdtemp(join(tmpdir(), 'mcp-doctor-selection-cache-'))
+    tmpDirs.push(dir)
+    const specPath = join(dir, 'openapi.yaml')
+    await writeFile(specPath, TWO_OP_SPEC)
+    return { dir, specPath }
+  }
+
+  it('reuses a fresh full-spec cache, filtered down to the selection (zero LLM calls)', async () => {
+    const { specPath } = await twoOpTempDir()
+    const { ai, calls } = countingAi()
+
+    const full = await runScan({ specPath, ai, cache: true })
+    expect(full.exitCode).toBe(0)
+    const coldCalls = calls()
+    expect(coldCalls).toBeGreaterThan(0)
+
+    const scoped = await runScan({
+      specPath,
+      ai,
+      cache: true,
+      selection: [{ path: '/users', methods: ['get'] }],
+    })
+    expect(scoped.exitCode).toBe(0)
+    expect(calls()).toBe(coldCalls) // cache hit — no new LLM work
+    expect(scoped.stderr).toMatch(/cache/i)
+    // cached full-spec findings are narrowed to the selection
+    expect(scoped.stdout).toContain('GET /users')
+    expect(scoped.stdout).not.toContain('GET /items')
+  })
+
+  it('never writes selection-scoped findings into the sidecar (no cache poisoning)', async () => {
+    const { dir, specPath } = await twoOpTempDir()
+    const { ai, calls } = countingAi()
+
+    // Cold scoped run: must not populate the sidecar with partial findings.
+    await runScan({
+      specPath,
+      ai,
+      cache: true,
+      selection: [{ path: '/users', methods: ['get'] }],
+    })
+    await expect(stat(join(dir, '.mcp-doctor.yaml'))).rejects.toThrow()
+
+    // A later full run therefore computes the full spec, not the scoped subset.
+    const scopedCalls = calls()
+    const full = await runScan({ specPath, ai, cache: true })
+    expect(calls()).toBeGreaterThan(scopedCalls)
+    expect(full.stdout).toContain('GET /items')
+  })
+})
+
 describe('runScan — grounded cache (handler-hash dimension)', () => {
   const GROUNDED_SPEC = `openapi: 3.0.3
 info:

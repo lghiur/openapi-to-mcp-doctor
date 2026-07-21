@@ -31,6 +31,7 @@ import {
 } from '@/lib/engine/operations'
 import { buildAnalysisRun } from '@/lib/engine/history/record'
 import { buildStructuralReport } from '@/lib/engine/report'
+import { filterFindings, filterOperations } from '@/lib/engine/selection'
 import { aiCapabilityFromEnv } from '@/lib/llm/capability'
 import type {
   AnalysisMode,
@@ -38,6 +39,7 @@ import type {
   EngineEvent,
   Finding,
   MismatchMode,
+  OperationSelection,
 } from '@/types/domain'
 import { saveRun } from '../history/store'
 import { renderHuman } from '../render/human'
@@ -71,6 +73,11 @@ export interface ScanOptions {
   historyBaseDir?: string
   /** Reuse/refresh the `.mcp-doctor.yaml` sidecar next to the spec (default in the CLI; `--no-cache` disables). */
   cache?: boolean
+  /**
+   * Analyse/fix only these paths+methods (lint findings AND fix application are
+   * both scoped); findings outside the selection are dropped. Undefined = whole spec.
+   */
+  selection?: OperationSelection
   /** Injected clock for deterministic tests; defaults to the real time. */
   now?: () => number
 }
@@ -149,7 +156,43 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
   const sidecarPath = sidecarPathFor(options.specPath)
   let result: AnalysisResult | null = null
 
-  if (options.cache === true && grounding !== undefined && routeFiles !== undefined) {
+  if (options.cache === true && options.selection !== undefined) {
+    // Selection-scoped runs treat the sidecar as READ-ONLY. The cache is keyed
+    // by spec hash alone (the selection is NOT part of the key), so a fresh
+    // full-spec cache may be consumed — narrowed to the selection below — but a
+    // scoped run must never write its partial findings back: a later full-spec
+    // run would silently reuse them as if they covered the whole document.
+    const cached = await readSidecar(sidecarPath)
+    if (cached && cached.specHash === specHash) {
+      const detected = detectVersion(spec)
+      if (detected.ok) {
+        const selectedLabels = new Set(
+          filterOperations(extractOperations(spec), options.selection).map((o) => o.label),
+        )
+        // Two filters, mirroring what a live scoped run produces: spec-path
+        // anchored findings go through the engine's selection filter; findings
+        // carrying an operation label (AI workers, grounding) must be on a
+        // selected operation — a live scoped run never analyses the others.
+        const scoped = filterFindings(cached.findings, options.selection).filter(
+          (f) => f.operation === undefined || selectedLabels.has(f.operation),
+        )
+        const groundingFindings = cached.operations
+          .filter((op) => selectedLabels.has(op.label))
+          .flatMap((op) => op.groundingFindings ?? [])
+        const merged = [...scoped, ...groundingFindings]
+        result = {
+          version: detected.version,
+          halted: false,
+          findings: merged,
+          summary: summarizeFindings(merged),
+          agents: [],
+        }
+        progress.push(
+          '✓ cache hit — reused previous findings, narrowed to the selected operations (no LLM calls)',
+        )
+      }
+    }
+  } else if (options.cache === true && grounding !== undefined && routeFiles !== undefined) {
     const detected = detectVersion(spec)
     if (detected.ok) {
       const version = detected.version
@@ -229,14 +272,27 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
   }
 
   if (result === null) {
-    const generator = runAnalysis(spec, { ai: options.ai, grounding, now })
+    const generator = runAnalysis(spec, {
+      ai: options.ai,
+      grounding,
+      now,
+      ...(options.selection !== undefined ? { selection: options.selection } : {}),
+    })
     let next = await generator.next()
     while (!next.done) {
       appendProgress(progress, next.value)
       next = await generator.next()
     }
     result = next.value
-    if (options.cache === true && grounding === undefined && !result.halted && result.version !== null) {
+    // `selection === undefined` guard: scoped results must never be cached
+    // (see the read-only rule above).
+    if (
+      options.cache === true &&
+      options.selection === undefined &&
+      grounding === undefined &&
+      !result.halted &&
+      result.version !== null
+    ) {
       await writeSidecar(sidecarPath, {
         schemaVersion: SCHEMA_VERSION,
         specHash,

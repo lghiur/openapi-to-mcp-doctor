@@ -87,6 +87,8 @@ On pull requests the action is an autonomous spec reviewer with a cumulative
 delta-gated PR comment) → `review` (inline comments on spec and handler lines)
 → `fix-pr` (idempotent stacked PR carrying the patched spec). All PR-visible
 output is delta-gated against a base-branch scan; fork PRs degrade to `summary`.
+Fix PRs are scoped to the PR by default (`fix-scope: pr` — only operations with
+findings this PR introduced); set `fix-scope: full` to patch the whole spec's debt.
 
 ```yaml
 on:

@@ -124,6 +124,24 @@ describe('renderStickyComment', () => {
     expect(render()).not.toContain('fixes ready')
   })
 
+  it("labels the fix call-out as scoped to the PR's changes when fixScope is pr", () => {
+    const md = render({
+      fixPr: { url: 'https://github.com/o/r/pull/12', number: 12 },
+      appliedFixCount: 3,
+      fixScope: 'pr',
+    })
+    expect(md).toContain("3 fixes ready** (scoped to this PR's changes)")
+  })
+
+  it('labels the fix call-out as whole-spec when fixScope is full', () => {
+    const md = render({
+      fixPr: { url: 'https://github.com/o/r/pull/12', number: 12 },
+      appliedFixCount: 7,
+      fixScope: 'full',
+    })
+    expect(md).toContain('7 fixes ready** (whole spec)')
+  })
+
   it('notes skipped inline comments only when > 0', () => {
     expect(render()).not.toContain('inline')
     expect(render({ skippedInline: 0 })).not.toContain('inline')

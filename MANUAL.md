@@ -245,7 +245,9 @@ base branch is available for delta gating. Fork PRs degrade to `summary`.
 | `fail-on`                        | `error` / `warning` / `never`               | `never` on PRs (delta-gated), else `error` |
 | `confidence-threshold`           | `high` / `medium` / `low`                   | `high` (`low` warns prominently)           |
 | `mismatch-mode`                  | `flag` / `fix`                              | `flag`                                     |
+| `fix-scope`                      | `pr` — fix only operations with findings introduced by this PR / `full` — fix the whole spec's debt | `pr` |
 | `llm-base-url` / `llm-api-token` | secrets; absent → lint-only tier            | —                                          |
+| `llm-model`                      | model name sent to the LLM endpoint         | endpoint default                           |
 | `mcp-version`                    | MCP spec version                            | `2025-11-25`                               |
 
 ---

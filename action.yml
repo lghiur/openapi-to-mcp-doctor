@@ -48,6 +48,10 @@ inputs:
     description: 'flag | fix (v2 codebase grounding).'
     required: false
     default: 'flag'
+  fix-scope:
+    description: 'pr (default) — fix only operations with findings introduced by this PR; full — fix the whole spec''s debt.'
+    required: false
+    default: 'pr'
   llm-base-url:
     description: 'OpenAI-compatible base URL for AI-powered analysis.'
     required: false
@@ -92,6 +96,7 @@ runs:
         INPUT_BOT_LOGIN: ${{ inputs.bot-login }}
         INPUT_CONFIDENCE_THRESHOLD: ${{ inputs.confidence-threshold }}
         INPUT_MISMATCH_MODE: ${{ inputs.mismatch-mode }}
+        INPUT_FIX_SCOPE: ${{ inputs.fix-scope }}
         INPUT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
         INPUT_LLM_API_TOKEN: ${{ inputs.llm-api-token }}
         INPUT_LLM_MODEL: ${{ inputs.llm-model }}
