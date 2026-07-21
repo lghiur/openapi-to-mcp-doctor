@@ -115,6 +115,19 @@ export function isPrCreationForbidden(error: unknown): boolean {
   )
 }
 
+/**
+ * Failed-agent lines from scan stderr ("✗ worker-1 failed: …"). AI workers
+ * fail soft (structural findings still ship), so the action must surface the
+ * failures — a silent fallback would let "AI never ran" masquerade as clean.
+ */
+export function extractAgentFailures(stderr: string): string[] {
+  return stderr
+    .split('\n')
+    .filter((line) => line.startsWith('✗ '))
+    .map((line) => line.slice(2).trim())
+    .filter((line) => line.length > 0)
+}
+
 /** Applied-fix count from a fix-mode scan's stdout ("Applied N fix(es), …"). */
 export function parseAppliedFixCount(fixStdout: string): number | undefined {
   const match = /Applied (\d+) fix\(es\)/.exec(fixStdout)

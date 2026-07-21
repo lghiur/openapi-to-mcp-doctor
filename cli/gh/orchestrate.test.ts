@@ -5,6 +5,7 @@ import {
   behaviorAtLeast,
   defaultFailOn,
   deltaGateSummary,
+  extractAgentFailures,
   findingMarkerKey,
   inlineCommentBody,
   isPrCreationForbidden,
@@ -347,5 +348,25 @@ describe('isPrCreationForbidden', () => {
     expect(isPrCreationForbidden(Object.assign(new Error('GitHub Actions is not permitted to create or approve pull requests.'), { status: 422 }))).toBe(false)
     expect(isPrCreationForbidden(new Error('boom'))).toBe(false)
     expect(isPrCreationForbidden(undefined)).toBe(false)
+  })
+})
+
+describe('extractAgentFailures', () => {
+  it('extracts failed-agent lines from scan stderr', () => {
+    const stderr = [
+      'Analyzing 12 operations…',
+      '✗ worker-1 failed: LLM request failed: 403 model not allowed',
+      '✓ worker-2 done',
+      '✗ post-process failed: timeout',
+    ].join('\n')
+    expect(extractAgentFailures(stderr)).toEqual([
+      'worker-1 failed: LLM request failed: 403 model not allowed',
+      'post-process failed: timeout',
+    ])
+  })
+
+  it('returns empty for clean stderr or empty input', () => {
+    expect(extractAgentFailures('✓ all good\n')).toEqual([])
+    expect(extractAgentFailures('')).toEqual([])
   })
 })

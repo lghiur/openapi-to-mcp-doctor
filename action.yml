@@ -54,6 +54,9 @@ inputs:
   llm-api-token:
     description: 'API token for the LLM endpoint (never logged).'
     required: false
+  llm-model:
+    description: 'Model name sent to the LLM endpoint (e.g. claude-sonnet-4-6). Set this when your gateway restricts allowed models.'
+    required: false
   route-paths:
     description: 'Comma-separated handler/route paths for codebase grounding. Omit to auto-discover in the workspace.'
     required: false
@@ -91,6 +94,7 @@ runs:
         INPUT_MISMATCH_MODE: ${{ inputs.mismatch-mode }}
         INPUT_LLM_BASE_URL: ${{ inputs.llm-base-url }}
         INPUT_LLM_API_TOKEN: ${{ inputs.llm-api-token }}
+        INPUT_LLM_MODEL: ${{ inputs.llm-model }}
         INPUT_ROUTE_PATHS: ${{ inputs.route-paths }}
         INPUT_MCP_VERSION: ${{ inputs.mcp-version }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}

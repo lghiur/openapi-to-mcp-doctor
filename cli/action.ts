@@ -26,11 +26,14 @@ import {
   behaviorAtLeast,
   defaultFailOn,
   deltaGateSummary,
+  extractAgentFailures,
   findingMarkerKey,
   inlineCommentBody,
   isPrCreationForbidden,
   isSafeGitRef,
   locateFindings,
+  mdCell,
+  neutralizeMentions,
   parseAppliedFixCount,
   parseBehavior,
   parseChoice,
@@ -371,6 +374,13 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
   if (headScan.exitCode === 2) fail(headScan.stdout, 2)
   const headReport = JSON.parse(headScan.stdout) as AnalysisReport
 
+  // AI workers fail soft (structural findings still ship) — but a silent
+  // fallback would let "AI never ran" masquerade as a clean AI pass.
+  const agentFailures = extractAgentFailures(headScan.stderr)
+  for (const failure of agentFailures) {
+    process.stdout.write(`::warning ::MCP Doctor AI agent ${failure}\n`)
+  }
+
   // fix-pr level: capture the patched spec from a fix-mode pass.
   const confidenceThreshold: ConfidenceThreshold =
     choiceInput('confidence-threshold', CONFIDENCE_VALUES) ?? 'high'
@@ -505,6 +515,13 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
       skippedInline,
       jobSummaryUrl: jobSummaryUrl(process.env),
     })
+    if (agentFailures.length > 0) {
+      const first = neutralizeMentions(agentFailures[0] ?? '')
+      body +=
+        `\n> ⚠️ **AI analysis degraded** — ${agentFailures.length} agent(s) failed ` +
+        `(\`${mdCell(first)}\`). The findings above may be structural-only; check the ` +
+        'workflow log and the `llm-base-url` / `llm-model` inputs.\n'
+    }
     if (fixPrForbidden) {
       body +=
         '\n> ⚠️ **Fix PR unavailable** — this repository does not allow GitHub Actions to ' +
@@ -567,8 +584,10 @@ async function main(): Promise<void> {
   // Surface LLM creds (provided as action inputs) to the engine's env contract.
   const baseUrl = input('llm-base-url')
   const apiToken = input('llm-api-token')
+  const llmModel = input('llm-model')
   if (baseUrl) process.env.LLM_BASE_URL = baseUrl
   if (apiToken) process.env.LLM_API_TOKEN = apiToken
+  if (llmModel) process.env.LLM_MODEL = llmModel
 
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd()
   // Repo-relative, no leading ./ — used for git show, annotations, and review paths.
