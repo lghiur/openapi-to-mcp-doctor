@@ -79,6 +79,9 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
+        # tsx resolves tsconfig (and its `@/` path aliases) from the cwd —
+        # which is the consumer's workspace. Point it at the action's own.
+        TSX_TSCONFIG_PATH: ${{ github.action_path }}/tsconfig.json
         INPUT_SPEC: ${{ inputs.spec }}
         INPUT_BEHAVIOR: ${{ inputs.behavior }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
