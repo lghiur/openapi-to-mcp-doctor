@@ -91,4 +91,6 @@ runs:
         INPUT_ROUTE_PATHS: ${{ inputs.route-paths }}
         INPUT_MCP_VERSION: ${{ inputs.mcp-version }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
-      run: node --import tsx ${{ github.action_path }}/cli/action.ts
+      # tsx must be invoked via the action's own node_modules — a bare
+      # `node --import tsx` would resolve tsx from the workspace repo instead.
+      run: ${{ github.action_path }}/node_modules/.bin/tsx ${{ github.action_path }}/cli/action.ts
