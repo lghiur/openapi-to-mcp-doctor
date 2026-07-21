@@ -1,8 +1,10 @@
-import { readdir, stat } from 'node:fs/promises'
+import { open, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import {
   HANDLER_HINT,
   MAX_SOURCE_CANDIDATES,
+  REGISTRATION_PROBE_BYTES,
+  ROUTE_REGISTRATION,
   SOURCE_EXCLUDE,
   SOURCE_PATTERN,
   SPEC_FILE_PATTERN,
@@ -38,9 +40,33 @@ async function walk(
   }
 }
 
+/** Concurrent content probes — bounds open file descriptors on large repos. */
+const PROBE_CONCURRENCY = 32
+
 /**
- * Recursively collect candidate route/handler files under `rootDir`,
- * handler-ish paths first, capped at `opts.max ?? MAX_SOURCE_CANDIDATES`.
+ * Does the file's leading `REGISTRATION_PROBE_BYTES` contain a route
+ * registration call? Unreadable files simply don't get promoted.
+ */
+async function registersRoutes(rootDir: string, relPath: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(path.join(rootDir, relPath), 'r')
+    const buffer = Buffer.alloc(REGISTRATION_PROBE_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, REGISTRATION_PROBE_BYTES, 0)
+    return ROUTE_REGISTRATION.test(buffer.toString('utf8', 0, bytesRead))
+  } catch {
+    return false
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
+/**
+ * Recursively collect candidate route/handler files under `rootDir`, capped at
+ * `opts.max ?? MAX_SOURCE_CANDIDATES`. Files whose content actually registers
+ * routes rank first (a cheap probe of the leading bytes — the checkout is on
+ * local disk), then the client.ts listSourceCandidates name ordering:
+ * handler-ish paths, shallower paths, alphabetical.
  */
 export async function discoverRouteFiles(
   rootDir: string,
@@ -50,10 +76,23 @@ export async function discoverRouteFiles(
   await walk(rootDir, '', undefined, files)
   const paths = files.filter((file) => SOURCE_PATTERN.test(file))
 
-  // Same ordering as client.ts listSourceCandidates: handler-ish files first,
-  // then shallower paths, then alphabetical — so the capped slice keeps the
-  // files most likely to register routes.
+  // Content beats name hints: a repo can have hundreds of hint-named files
+  // (Tyk's apidef/*, gateway/api_*.go) while a single un-alphabetical file
+  // registers every route — the capped slice must keep that file.
+  const registering = new Set<string>()
+  for (let start = 0; start < paths.length; start += PROBE_CONCURRENCY) {
+    const batch = paths.slice(start, start + PROBE_CONCURRENCY)
+    const probed = await Promise.all(batch.map((file) => registersRoutes(rootDir, file)))
+    for (let i = 0; i < batch.length; i++) {
+      const file = batch[i]
+      if (probed[i] === true && file !== undefined) registering.add(file)
+    }
+  }
+
   paths.sort((a, b) => {
+    const registersA = registering.has(a) ? 0 : 1
+    const registersB = registering.has(b) ? 0 : 1
+    if (registersA !== registersB) return registersA - registersB
     const hintA = HANDLER_HINT.test(a) ? 0 : 1
     const hintB = HANDLER_HINT.test(b) ? 0 : 1
     if (hintA !== hintB) return hintA - hintB

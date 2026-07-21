@@ -41,6 +41,10 @@ describe('discoverRouteFiles', () => {
       'handlers/users.test.ts',
       'types/api.d.ts',
       'README.md',
+      // Test-support helpers register throwaway test-server routes (Tyk's
+      // gateway/testutil.go) — never spec-relevant, and the content probe
+      // would otherwise promote them over real registration files.
+      'gateway/testutil.go',
       'handlers/users.go',
     ])
     const out = await discoverRouteFiles(root)
@@ -65,6 +69,54 @@ describe('discoverRouteFiles', () => {
   it('returns an empty list for a repo with no source files', async () => {
     const root = await makeRepo(['README.md', 'docs/guide.md'])
     await expect(discoverRouteFiles(root)).resolves.toEqual([])
+  })
+
+  // Regression: Tyk's gateway/server.go (the file registering every /tyk route)
+  // ranked 46th of 581 by name hints alone — sliced out by the 40 cap, so the
+  // undocumented-endpoint check saw zero registrations and produced nothing.
+  it('keeps a file that registers routes under the cap even when hint-named files crowd it out', async () => {
+    const hintFiles = Array.from(
+      { length: 41 },
+      (_, i) => `apidef/api_${String(i).padStart(2, '0')}.go`,
+    )
+    const root = await makeRepo([...hintFiles, 'gateway/server.go'])
+    await writeFile(
+      path.join(root, 'gateway/server.go'),
+      'func (gw *Gateway) loadAPIEndpoints(r *mux.Router) {\n' +
+        '\tr.HandleFunc("/debug/config-checksum", gw.configChecksumHandler).Methods("GET")\n' +
+        '}\n',
+      'utf8',
+    )
+    const out = await discoverRouteFiles(root)
+    expect(out).toHaveLength(40)
+    expect(out[0]).toBe('gateway/server.go')
+  })
+
+  it('promotes registration styles across frameworks, but not plain map.get() calls', async () => {
+    const root = await makeRepo([
+      'api/aaa.go', // hint-named, no registrations — would win on name alone
+      'web/routes.js',
+      'cmd/main.go',
+      'cache/store.ts',
+    ])
+    await writeFile(
+      path.join(root, 'web/routes.js'),
+      "app.get('/users', listUsers)\n",
+      'utf8',
+    )
+    await writeFile(
+      path.join(root, 'cmd/main.go'),
+      'mux.HandleFunc("GET /orders", ordersHandler)\n',
+      'utf8',
+    )
+    await writeFile(
+      path.join(root, 'cache/store.ts'),
+      "const value = cache.get('users')\n",
+      'utf8',
+    )
+    const out = await discoverRouteFiles(root, { max: 3 })
+    expect(out.slice(0, 2).sort()).toEqual(['cmd/main.go', 'web/routes.js'])
+    expect(out).not.toContain('cache/store.ts')
   })
 })
 

@@ -74,13 +74,18 @@ export function detectMountPrefixes(routeFiles: RouteFile[]): string[] {
     /@Controller\(\s*["'`]([^"'`]+)["'`]/g, // NestJS
     /@RequestMapping\(\s*(?:value\s*=\s*)?["'`]([^"'`]+)["'`]/g, // Spring class level
   ]
+  // A mount prefix must look like a URL path. The loose `prefix:`/`prefix=`
+  // patterns otherwise capture until the NEXT quote in the file — a log line
+  // like `log.Info("... with prefix: ", cfg.StatsdPrefix)` yields several
+  // lines of code as a "prefix".
+  const PATH_LIKE = /^[\w\-./:{}<>]+$/
   const prefixes = new Set<string>()
   for (const file of routeFiles) {
     for (const pattern of patterns) {
       pattern.lastIndex = 0
       for (const match of file.content.matchAll(pattern)) {
         const raw = match[1]
-        if (raw === undefined) continue
+        if (raw === undefined || !PATH_LIKE.test(raw)) continue
         const normalized = normalizePath(raw)
         if (normalized !== '/') prefixes.add(normalized)
       }

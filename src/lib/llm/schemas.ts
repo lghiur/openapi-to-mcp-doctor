@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { WORKER_RULES, normalizeRule } from '@/lib/engine/workers/rules'
 
 /**
  * Zod schemas for LLM structured output. Validation happens at this boundary so
@@ -33,10 +34,23 @@ export const LlmPathSchema = z
       'Required for a suggestion to be appliable.',
   )
 
+/**
+ * Rule id pinned to the fixed worker taxonomy. Delta gating keys findings on
+ * rule+operation+path, so free-text rule names that drift between runs make
+ * every AI finding look new. `z.toJSONSchema` advertises the closed enum to the
+ * model; parsing forgivingly normalizes any drifted name onto the taxonomy
+ * (deterministically) instead of failing the whole worker batch over one
+ * invented rule id.
+ */
+const WorkerRuleSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? normalizeRule(value) : value),
+  z.enum(WORKER_RULES),
+)
+
 /** One finding produced by a worker agent for a single operation. */
 export const LlmFindingSchema = z.object({
   operation: z.string(),
-  rule: z.string(),
+  rule: WorkerRuleSchema,
   severity: LlmSeveritySchema,
   confidence: LlmConfidenceSchema,
   message: z.string(),

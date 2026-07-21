@@ -1,6 +1,29 @@
 import type { OperationRef } from '@/lib/engine/operations'
 import type { StructuralGapsByOperation } from '@/lib/engine/workers/gaps'
+import type { WorkerRule } from '@/lib/engine/workers/rules'
 import type { OpenApiVersion } from '@/types/domain'
+
+/**
+ * The allowed rule ids and what each covers, rendered into the system prompt.
+ * Stable rule ids are what make delta gating work — the model must never
+ * free-text its own. Keep in sync with WORKER_RULES (the Record key type
+ * enforces exhaustiveness at compile time).
+ */
+const RULE_GUIDE: Record<WorkerRule, string> = {
+  'mcp-description-missing-when':
+    'the description does not explain WHEN an agent should call this tool',
+  'mcp-description-unclear': 'the description is vague, too short, or missing key context',
+  'mcp-description-name-duplication': 'the description merely restates the operation/tool name',
+  'mcp-returns-undescribed': 'what the operation returns is not explained in actionable terms',
+  'mcp-response-ambiguous': 'the response semantics are ambiguous or misleading',
+  'mcp-response-schema-required': 'a 2xx response is missing a schema (author one)',
+  'mcp-parameter-description-missing': 'a parameter has no description (author one)',
+  'mcp-parameter-description-unclear': 'a parameter description is vague or ambiguous',
+  'mcp-parameter-description-misleading':
+    'a parameter description contradicts its name, type, or actual behaviour',
+  'mcp-enum-description-required': 'enum values lack descriptions (author them)',
+  'mcp-nested-description-required': 'a nested schema property lacks a description (author one)',
+}
 
 /**
  * System prompt for a worker agent. Includes the detected OpenAPI version and
@@ -15,6 +38,10 @@ export function buildWorkerSystemPrompt(version: OpenApiVersion): string {
     `- Returns: does it explain what the tool returns in actionable terms?`,
     `- Name duplication: does the description merely repeat the tool/operation name?`,
     `- Parameters: are descriptions actionable for an LLM constructing arguments?`,
+    ``,
+    `Set each finding's "rule" to ONLY these rule ids — never invent your own; pick the`,
+    `closest match:`,
+    ...Object.entries(RULE_GUIDE).map(([rule, meaning]) => `- ${rule} — ${meaning}`),
     ``,
     `Report only genuine problems. Use confidence MEDIUM for judgment calls, and HIGH`,
     `only when you can cite an unambiguous rule violation. This spec is OpenAPI ${version} —`,

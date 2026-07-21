@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { OperationRef } from '@/lib/engine/operations'
 import { createWorker } from '@/lib/engine/workers/worker'
 import { buildWorkerSystemPrompt } from '@/lib/engine/workers/prompt'
+import { WORKER_RULES } from '@/lib/engine/workers/rules'
 import type { WorkerOutput } from '@/lib/llm/schemas'
 
 const batch: OperationRef[] = [
@@ -22,6 +23,14 @@ describe('buildWorkerSystemPrompt', () => {
 
     const p31 = buildWorkerSystemPrompt('3.1')
     expect(p31).toContain('never use OpenAPI 3.0 syntax')
+  })
+
+  it('lists every allowed rule id and forbids inventing new ones', () => {
+    const prompt = buildWorkerSystemPrompt('3.0')
+    for (const rule of WORKER_RULES) {
+      expect(prompt).toContain(rule)
+    }
+    expect(prompt).toMatch(/ONLY these rule ids/i)
   })
 })
 
@@ -66,7 +75,7 @@ describe('createWorker', () => {
       findings: [
         {
           operation: 'GET /users/{id}',
-          rule: 'MCP_NO_WHEN_TO_USE',
+          rule: 'mcp-description-missing-when',
           severity: 'warning',
           confidence: 'MEDIUM',
           message: 'Explain when to use this.',
@@ -84,7 +93,7 @@ describe('createWorker', () => {
     expect(findings[0]).toMatchObject({
       agentId: 'worker-1',
       operation: 'GET /users/{id}',
-      rule: 'MCP_NO_WHEN_TO_USE',
+      rule: 'mcp-description-missing-when',
       severity: 'warning',
       confidence: 'MEDIUM',
       before: 'Returns a user.',
@@ -97,7 +106,7 @@ describe('createWorker', () => {
       findings: [
         {
           operation: 'GET /users/{id}',
-          rule: 'A',
+          rule: 'mcp-description-missing-when',
           severity: 'error',
           confidence: 'HIGH',
           message: 'm',
@@ -107,14 +116,14 @@ describe('createWorker', () => {
         // HIGH but nothing to apply / nowhere to apply it — not auto-fixable.
         {
           operation: 'GET /users/{id}',
-          rule: 'B',
+          rule: 'mcp-returns-undescribed',
           severity: 'error',
           confidence: 'HIGH',
           message: 'm',
         },
         {
           operation: 'GET /users/{id}',
-          rule: 'C',
+          rule: 'mcp-description-unclear',
           severity: 'warning',
           confidence: 'MEDIUM',
           message: 'm',
@@ -125,9 +134,9 @@ describe('createWorker', () => {
     })
     const worker = createWorker({ model: fakeModel, generate })
     const findings = await worker(batch, { version: '3.0', agentId: 'worker-1' })
-    expect(findings.find((f) => f.rule === 'A')?.autoFixable).toBe(true)
-    expect(findings.find((f) => f.rule === 'B')?.autoFixable).toBe(false)
-    expect(findings.find((f) => f.rule === 'C')?.autoFixable).toBe(false)
+    expect(findings.find((f) => f.rule === 'mcp-description-missing-when')?.autoFixable).toBe(true)
+    expect(findings.find((f) => f.rule === 'mcp-returns-undescribed')?.autoFixable).toBe(false)
+    expect(findings.find((f) => f.rule === 'mcp-description-unclear')?.autoFixable).toBe(false)
   })
 
   it('anchors agent-relative paths to the document root via the operation', async () => {
@@ -135,7 +144,7 @@ describe('createWorker', () => {
       findings: [
         {
           operation: 'GET /users/{id}',
-          rule: 'A',
+          rule: 'mcp-description-unclear',
           severity: 'warning',
           confidence: 'MEDIUM',
           message: 'm',
@@ -161,7 +170,7 @@ describe('createWorker', () => {
       findings: [
         {
           operation: 'DELETE /nonexistent',
-          rule: 'A',
+          rule: 'mcp-description-unclear',
           severity: 'error',
           confidence: 'HIGH',
           message: 'm',
@@ -192,14 +201,14 @@ describe('createWorker', () => {
       findings: [
         {
           operation: 'GET /users/{id}',
-          rule: 'A',
+          rule: 'mcp-description-unclear',
           severity: 'info',
           confidence: 'MEDIUM',
           message: 'm',
         },
         {
           operation: 'GET /users/{id}',
-          rule: 'A',
+          rule: 'mcp-description-unclear',
           severity: 'info',
           confidence: 'MEDIUM',
           message: 'm',

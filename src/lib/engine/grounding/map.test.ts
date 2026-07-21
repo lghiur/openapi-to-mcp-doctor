@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { findSymbolDefinition, mapOperationsToHandlers } from '@/lib/engine/grounding/map'
+import {
+  detectMountPrefixes,
+  findSymbolDefinition,
+  mapOperationsToHandlers,
+} from '@/lib/engine/grounding/map'
 import type { OperationRef } from '@/lib/engine/operations'
 
 function op(method: string, path: string): OperationRef {
@@ -188,6 +192,22 @@ def list_pets():
     }
     const [result] = mapOperationsToHandlers([op('GET', '/pets/list')], [file])
     expect(result).toMatchObject({ matched: true, file: 'pets.py', line: 2 })
+  })
+
+  // Regression: Tyk's instrumentation_handlers.go log line `"... with prefix: ",
+  // cfg.StatsdPrefix)` made the loose `prefix:`/`prefix=` pattern capture code
+  // spanning several lines (until the next quote) as a "mount prefix".
+  it('rejects prefix-like matches inside log strings that capture code, not a path', () => {
+    const file = {
+      path: 'gateway/instrumentation_handlers.go',
+      content: `log.Info("Sending stats with prefix: ", cfg.StatsdPrefix)
+sink, err := NewSink(cfg.Conn,
+  &Opts{Prefix: cfg.StatsdPrefix})
+if err != nil {
+  log.Fatal("Failed to start sink: ", err)
+}`,
+    }
+    expect(detectMountPrefixes([file])).toEqual([])
   })
 
   it('still prefers an exact full-path match over a prefix-stripped one', () => {
