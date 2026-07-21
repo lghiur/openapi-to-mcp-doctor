@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: MCP Doctor
-        uses: ./ # or: TykTechnologies/openapi-to-mcp-doctor@v1
+        uses: ./ # external repos: lghiur/openapi-to-mcp-doctor@master
         with:
           behavior: comment # summary | comment | review | fix-pr
           # spec: api/openapi.yaml       # omit to auto-detect

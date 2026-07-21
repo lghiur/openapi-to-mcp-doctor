@@ -101,7 +101,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 } # base branch needed for delta gating
-      - uses: TykTechnologies/openapi-to-mcp-doctor@v1
+      # Current home (planned eventual home: TykTechnologies/openapi-to-mcp-doctor)
+      - uses: lghiur/openapi-to-mcp-doctor@master
         with:
           behavior: comment # summary | comment | review | fix-pr
           # spec / route-paths auto-detected when omitted
