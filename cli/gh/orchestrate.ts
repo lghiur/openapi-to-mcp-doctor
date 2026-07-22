@@ -117,9 +117,43 @@ export function isPrCreationForbidden(error: unknown): boolean {
 }
 
 /**
+ * The workflow token lacks the scopes the fix-PR step needs (`git.createRef`
+ * with a `contents: read` token throws this shape). Unlike
+ * {@link isPrCreationForbidden} this is a token-permission problem, not a repo
+ * setting — but both must degrade the fix-pr level, never crash the run after
+ * review sync (the sticky comment would then never post).
+ */
+export function isPermissionDenied(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const { status, message } = error as { status?: unknown; message?: unknown }
+  return (
+    status === 403 &&
+    typeof message === 'string' &&
+    (/resource not accessible/i.test(message) || /not permitted/i.test(message))
+  )
+}
+
+/**
+ * Closed-lifecycle decision for the stacked fix PR. A MERGED source PR's
+ * fixes survive on the base branch, so the fix PR is re-pointed there to land
+ * on its own. An ABANDONED (closed-unmerged) source PR must NOT have its fix
+ * PR re-pointed — that would propose the abandoned branch's spec content into
+ * the base branch — so the fix PR is closed instead.
+ */
+export function closedLifecycleAction(merged: boolean | undefined): 'repoint' | 'close' {
+  return merged === true ? 'repoint' : 'close'
+}
+
+/**
  * Failed-agent lines from scan stderr ("✗ worker-1 failed: …"). AI workers
  * fail soft (structural findings still ship), so the action must surface the
  * failures — a silent fallback would let "AI never ran" masquerade as clean.
+ *
+ * CONTRACT: the producer is `appendProgress` in `cli/commands/scan.ts`, which
+ * emits exactly `✗ ${agentId} failed: ${error}` for `agent_completed` events
+ * carrying an error. There is no structured channel for this yet — change the
+ * producer format only together with this parser and the round-trip test in
+ * `orchestrate.test.ts` ("scan-output contract").
  */
 export function extractAgentFailures(stderr: string): string[] {
   return stderr
@@ -129,16 +163,7 @@ export function extractAgentFailures(stderr: string): string[] {
     .filter((line) => line.length > 0)
 }
 
-const HTTP_METHODS = new Set([
-  'get',
-  'put',
-  'post',
-  'delete',
-  'options',
-  'head',
-  'patch',
-  'trace',
-])
+const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'])
 
 /**
  * Build an engine `OperationSelection` from findings' operation labels
@@ -164,7 +189,15 @@ export function selectionFromFindings(findings: ReportFinding[]): OperationSelec
   return [...byPath.entries()].map(([path, methods]) => ({ path, methods: [...methods] }))
 }
 
-/** Applied-fix count from a fix-mode scan's stdout ("Applied N fix(es), …"). */
+/**
+ * Applied-fix count from a fix-mode scan's stdout ("Applied N fix(es), …").
+ *
+ * CONTRACT: the producer is `runScan` (fix mode) in `cli/commands/scan.ts`,
+ * which emits exactly `Applied ${applied} fix(es), skipped ${skipped}.`.
+ * There is no structured channel for this yet — change the producer format
+ * only together with this parser and the round-trip test in
+ * `orchestrate.test.ts` ("scan-output contract").
+ */
 export function parseAppliedFixCount(fixStdout: string): number | undefined {
   const match = /Applied (\d+) fix\(es\)/.exec(fixStdout)
   return match ? Number(match[1]) : undefined

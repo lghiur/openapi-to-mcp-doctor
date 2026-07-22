@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import Link from 'next/link'
 import { Header } from '@/components/app-shell/header'
 import { HealthRing } from '@/components/ui/health-ring'
-import { authOptions } from '@/lib/auth'
+import { authOptions, getGitHubAccessToken } from '@/lib/auth'
 import { computeHealthScore } from '@/lib/engine'
 import { getRunStore } from '@/lib/db'
 import { createGitHubClient, type RepoSummary } from '@/lib/github/client'
@@ -12,7 +12,9 @@ import { RepoBrowser } from '@/features/github/components/RepoBrowser'
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions)
-  const token = session?.accessToken
+  // The GitHub token is read server-side from the JWT cookie — it is never on
+  // the session object (which the browser can fetch via /api/auth/session).
+  const token = await getGitHubAccessToken()
   const llmConfigured = isLlmEnabled(process.env)
 
   let repos: RepoSummary[] = []

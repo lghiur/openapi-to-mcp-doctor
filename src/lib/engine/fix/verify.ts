@@ -1,5 +1,6 @@
+import { filterFindings } from '@/lib/engine/selection'
 import { runStructuralAnalysis } from '@/lib/engine/structural'
-import type { Finding } from '@/types/domain'
+import type { Finding, OperationSelection } from '@/types/domain'
 
 export interface VerifyFixesOptions {
   /** The spec after fixes were applied. */
@@ -8,6 +9,13 @@ export interface VerifyFixesOptions {
   applied: Finding[]
   /** Every finding from the original analysis — the baseline for regressions. */
   originalFindings: Finding[]
+  /**
+   * The operation selection the baseline was produced under, if any. The
+   * re-lint of the patched spec is filtered identically before diffing —
+   * otherwise every pre-existing out-of-selection finding would be misreported
+   * as a regression.
+   */
+  selection?: OperationSelection
 }
 
 export interface VerifyFixesResult {
@@ -37,13 +45,15 @@ export async function verifyFixes(options: VerifyFixesOptions): Promise<VerifyFi
     return { valid: false, resolved: [], unresolved: [...options.applied], regressions: [] }
   }
 
-  const after = new Set(analysis.findings.map((f) => f.id))
+  // Scope the re-lint exactly like the baseline was scoped.
+  const patchedFindings = filterFindings(analysis.findings, options.selection)
+  const after = new Set(patchedFindings.map((f) => f.id))
   const before = new Set(options.originalFindings.map((f) => f.id))
 
   return {
     valid: true,
     resolved: options.applied.filter((f) => !after.has(f.id)),
     unresolved: options.applied.filter((f) => after.has(f.id)),
-    regressions: analysis.findings.filter((f) => !before.has(f.id)),
+    regressions: patchedFindings.filter((f) => !before.has(f.id)),
   }
 }

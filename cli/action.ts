@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
-import { appendFile, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { Octokit } from '@octokit/rest'
+import { sidecarPathFor } from '@/lib/engine/cache/sidecar'
 import { EXIT_CODES } from '@/lib/engine/constants'
 import { type IssueCommentApi, upsertStickyComment } from '@/lib/github/comments'
 import { type ReviewApi, type ReviewCommentInput, syncPrReview } from '@/lib/github/review'
 import {
+  closeFixPrForAbandonedSource,
   closeFixPrIfObsolete,
   ensureStackedFixPr,
   repointOrCloseFixPr,
@@ -24,11 +26,13 @@ import { detectSpecPath, discoverRouteFiles, expandRoutePaths } from './gh/disco
 import {
   aiAllowedForStrategy,
   behaviorAtLeast,
+  closedLifecycleAction,
   defaultFailOn,
   deltaGateSummary,
   extractAgentFailures,
   findingMarkerKey,
   inlineCommentBody,
+  isPermissionDenied,
   isPrCreationForbidden,
   isSafeGitRef,
   locateFindings,
@@ -179,10 +183,25 @@ function stackedPrApi(octokit: Octokit): StackedPrApi {
 // Non-PR mode (workflow_dispatch / push) — the historical plain scan.
 // ---------------------------------------------------------------------------
 
-async function runPlainScan(specPath: string, failOn: FailOn): Promise<never> {
+async function runPlainScan(
+  specPath: string,
+  failOn: FailOn,
+  opts?: { forceLint?: boolean },
+): Promise<never> {
   const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd()
   const routePaths = await routePathsFromInput(workspace)
-  const mode = choiceInput('mode', MODE_VALUES) ?? 'lint'
+  const requestedMode = choiceInput('mode', MODE_VALUES) ?? 'lint'
+  // PR fallback (direction detection unavailable): a fix-mode run would
+  // silently rewrite the spec in the workspace on a PR AND green-light the
+  // gate — never apply fixes there, only lint.
+  const mode = opts?.forceLint === true ? 'lint' : requestedMode
+  if (opts?.forceLint === true && requestedMode === 'fix') {
+    process.stdout.write(
+      '::warning ::MCP Doctor: mode "fix" ignored — change-direction detection was ' +
+        'unavailable for this PR, and the fallback scan must never rewrite the spec. ' +
+        'Running lint only.\n',
+    )
+  }
   const mismatchMode: MismatchMode = choiceInput('mismatch-mode', MISMATCH_VALUES) ?? 'flag'
   const ai = aiCapabilityFromEnv(process.env)
 
@@ -320,9 +339,26 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
       `::warning ::MCP Doctor: could not diff origin/${ctx.baseRef}...${ctx.headSha} ` +
         '(is the checkout too shallow? use fetch-depth: 0) — falling back to a plain scan.\n',
     )
-    return runPlainScan(specPath, choiceInput('fail-on', FAIL_ON_VALUES) ?? defaultFailOn(true))
+    return runPlainScan(specPath, choiceInput('fail-on', FAIL_ON_VALUES) ?? defaultFailOn(true), {
+      forceLint: true,
+    })
   }
-  const direction = detectDirection({ changedFiles: changed, specPath })
+
+  // A spec renamed by the PR: resolve its OLD path up front — direction needs
+  // it to recognise the rename as a spec change, and the base scan reads the
+  // spec from that path on the base branch.
+  const nameStatus = await git(workspace, [
+    'diff',
+    '--name-status',
+    `origin/${ctx.baseRef}...${ctx.headSha}`,
+  ])
+  const specOldPath =
+    nameStatus.exitCode === 0 ? renamedFrom(nameStatus.stdout, specPath) : undefined
+  const direction = detectDirection({
+    changedFiles: changed,
+    specPath,
+    ...(specOldPath !== undefined ? { specRenamedFrom: specOldPath } : {}),
+  })
 
   // lint-only PRs must cost zero LLM calls.
   const ai = aiAllowedForStrategy(direction.strategy) ? aiCapabilityFromEnv(process.env) : undefined
@@ -335,19 +371,19 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
   const mcpVersion = input('mcp-version')
   const mismatchMode: MismatchMode = choiceInput('mismatch-mode', MISMATCH_VALUES) ?? 'flag'
 
-  // Base scan with the SAME ai capability as the head scan, so AI findings on
-  // operations this PR never touched exist on both sides and cancel out in the
-  // delta — otherwise pre-existing debt gets labeled "New in this PR". A spec
-  // renamed by the PR is read from its OLD path on the base branch; a missing
-  // base spec (new file) legitimately means every head finding is new.
+  // Base scan with the SAME ai capability AND the same route files as the head
+  // scan, so findings on operations this PR never touched exist on both sides
+  // and cancel out in the delta — without routePaths here, grounding
+  // (SPEC_CODE_*) findings only ever existed on the head side and were ALL
+  // labeled "New in this PR". The route files come from the HEAD checkout;
+  // that is deliberate: the delta answers "what changed for THIS PR's code",
+  // so both spec versions are compared against the same (head) grounding
+  // source. A spec renamed by the PR is read from its OLD path on the base
+  // branch; a missing base spec (new file) legitimately means every head
+  // finding is new.
   let baseReport: AnalysisReport | undefined
-  const nameStatus = await git(workspace, [
-    'diff',
-    '--name-status',
-    `origin/${ctx.baseRef}...${ctx.headSha}`,
-  ])
-  const basePathOfSpec =
-    nameStatus.exitCode === 0 ? (renamedFrom(nameStatus.stdout, specPath) ?? specPath) : specPath
+  let baseScanDegraded = false
+  const basePathOfSpec = specOldPath ?? specPath
   const shownBase = await git(workspace, ['show', `origin/${ctx.baseRef}:${basePathOfSpec}`])
   if (shownBase.exitCode === 0) {
     const baseSpecPath = path.join(scratchDir, `base-${path.basename(basePathOfSpec)}`)
@@ -357,10 +393,30 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
       json: true,
       mcpVersion,
       mismatchMode,
+      routePaths,
       ai,
     })
+    // Base-scan AI failures fail soft into a structural-only base report —
+    // which would silently label every pre-existing AI finding as new. Surface
+    // it and mark the delta as unreliable in the sticky comment below.
+    const baseFailures = extractAgentFailures(baseScan.stderr)
+    if (baseFailures.length > 0) {
+      baseScanDegraded = true
+      for (const failure of baseFailures) {
+        process.stdout.write(`::warning ::MCP Doctor AI agent (base scan) ${failure}\n`)
+      }
+    }
     if (baseScan.exitCode !== 2) baseReport = JSON.parse(baseScan.stdout) as AnalysisReport
   }
+
+  // A `.mcp-doctor.yaml` sidecar committed in the consumer repo is untrusted
+  // input: with a matching spec hash it would be served back verbatim as
+  // "fresh" findings (frozen or outright spoofed). CI is stateless, so delete
+  // any pre-existing sidecar before the head scan. The ONLY intra-run reuse
+  // that matters — head scan → fix pass, zero extra LLM calls — is preserved:
+  // the head scan below rewrites the sidecar itself from its own fresh
+  // results, and the fix pass reads that trusted, this-run copy.
+  await rm(sidecarPathFor(specPath), { force: true })
 
   // Head scan. The sidecar cache keeps the optional fix pass below from
   // paying for the same LLM analysis twice.
@@ -486,7 +542,7 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
 
     // fix-pr level: stacked PR carrying the patched spec — or, when this push
     // left nothing to patch, close the now-obsolete fix PR from earlier pushes.
-    let fixPrForbidden = false
+    let fixPrBlocked: 'creation-forbidden' | 'permission-denied' | undefined
     if (behavior === 'fix-pr') {
       if (patched !== undefined && patched !== headSpecText) {
         try {
@@ -501,22 +557,36 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
               `Automated OpenAPI spec fixes for #${ctx.prNumber} (confidence threshold: ` +
               `\`${confidenceThreshold}\`; ${
                 fixScope === 'pr'
-                  ? "scoped to operations with findings this PR introduced"
-                  : "whole spec"
+                  ? 'scoped to operations with findings this PR introduced'
+                  : 'whole spec'
               }). Merge this into \`${ctx.headRef}\` to apply them.\n\n` +
               '🤖 Opened by [MCP Doctor](https://github.com/TykTechnologies/openapi-to-mcp-doctor)',
           })
         } catch (error) {
-          // Repo hasn't enabled "Allow GitHub Actions to create and approve
-          // pull requests" — degrade to review level instead of failing.
-          if (!isPrCreationForbidden(error)) throw error
-          fixPrForbidden = true
-          process.stdout.write(
-            '::warning::MCP Doctor: behavior "fix-pr" requested, but this repository does not ' +
-              'allow GitHub Actions to create pull requests. Enable it under Settings → Actions → ' +
-              'General → "Allow GitHub Actions to create and approve pull requests". ' +
-              'Continuing at "review" level.\n',
-          )
+          // Two normal, permission-shaped 403 conditions degrade to review
+          // level instead of crashing (a throw here lands AFTER review sync
+          // but BEFORE the sticky comment ever posts): the repo setting that
+          // blocks Actions from creating PRs, and a workflow token missing
+          // `contents: write` (git.createRef throws "Resource not accessible
+          // by integration"). Anything else is a real failure — rethrow.
+          if (isPrCreationForbidden(error)) {
+            fixPrBlocked = 'creation-forbidden'
+            process.stdout.write(
+              '::warning::MCP Doctor: behavior "fix-pr" requested, but this repository does not ' +
+                'allow GitHub Actions to create pull requests. Enable it under Settings → Actions → ' +
+                'General → "Allow GitHub Actions to create and approve pull requests". ' +
+                'Continuing at "review" level.\n',
+            )
+          } else if (isPermissionDenied(error)) {
+            fixPrBlocked = 'permission-denied'
+            process.stdout.write(
+              '::warning::MCP Doctor: behavior "fix-pr" requested, but the workflow token cannot ' +
+                'push the fix branch (403 permission denied). Grant `contents: write` in the ' +
+                'workflow\'s `permissions:` block. Continuing at "review" level.\n',
+            )
+          } else {
+            throw error
+          }
         }
       } else {
         const outcome = await closeFixPrIfObsolete(stackedPrApi(octokit), {
@@ -552,11 +622,22 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
         `(\`${mdCell(first)}\`). The findings above may be structural-only; check the ` +
         'workflow log and the `llm-base-url` / `llm-model` inputs.\n'
     }
-    if (fixPrForbidden) {
+    if (baseScanDegraded) {
+      body +=
+        '\n> ⚠️ **Base scan degraded** — AI agent(s) failed while scanning the base branch, so ' +
+        'its report may be structural-only. New-finding attribution above may include ' +
+        'pre-existing issues; check the workflow log.\n'
+    }
+    if (fixPrBlocked === 'creation-forbidden') {
       body +=
         '\n> ⚠️ **Fix PR unavailable** — this repository does not allow GitHub Actions to ' +
         'create pull requests. Enable it under *Settings → Actions → General → “Allow GitHub ' +
         'Actions to create and approve pull requests”* to receive automated spec-fix PRs.\n'
+    } else if (fixPrBlocked === 'permission-denied') {
+      body +=
+        '\n> ⚠️ **Fix PR unavailable** — the workflow token cannot push the fix branch. Grant ' +
+        '`contents: write` (plus `pull-requests: write`) in the workflow’s `permissions:` block ' +
+        'to receive automated spec-fix PRs.\n'
     }
     if (behavior === 'fix-pr' && confidenceThreshold === 'low') {
       body +=
@@ -578,7 +659,7 @@ async function runPrMode(specPath: string, ctx: PrContext): Promise<never> {
   process.exit(failOnGate(failOn, deltaGateSummary(delta.newFindings)) ? 1 : 0)
 }
 
-/** Source PR closed/merged: re-point or close the stacked fix PR, nothing else. */
+/** Source PR closed: re-point (merged) or close (abandoned) the stacked fix PR. */
 async function runClosedLifecycle(specPath: string, ctx: PrContext): Promise<never> {
   const token = resolveGithubToken(input('github-token'), process.env)
   if (token === undefined || ctx.isFork) {
@@ -586,14 +667,28 @@ async function runClosedLifecycle(specPath: string, ctx: PrContext): Promise<nev
     process.exit(0)
   }
   const octokit = new Octokit({ auth: token })
-  const outcome = await repointOrCloseFixPr(stackedPrApi(octokit), {
+  if (closedLifecycleAction(ctx.merged) === 'repoint') {
+    // Merged: the source branch's content landed on the base branch, so
+    // surviving fixes can be re-pointed there and land on their own.
+    const outcome = await repointOrCloseFixPr(stackedPrApi(octokit), {
+      owner: ctx.owner,
+      repo: ctx.repo,
+      sourceBranch: ctx.headRef,
+      newBaseRef: ctx.baseRef,
+      specPath,
+    })
+    process.stdout.write(`MCP Doctor: PR merged — fix PR lifecycle: ${outcome}.\n`)
+    process.exit(0)
+  }
+  // Closed WITHOUT merging (or merged state unknown): the source branch was
+  // abandoned. Re-pointing would propose the abandoned branch's spec content
+  // into the base branch — close the fix PR instead.
+  const outcome = await closeFixPrForAbandonedSource(stackedPrApi(octokit), {
     owner: ctx.owner,
     repo: ctx.repo,
     sourceBranch: ctx.headRef,
-    newBaseRef: ctx.baseRef,
-    specPath,
   })
-  process.stdout.write(`MCP Doctor: PR closed — fix PR lifecycle: ${outcome}.\n`)
+  process.stdout.write(`MCP Doctor: PR closed without merging — fix PR lifecycle: ${outcome}.\n`)
   process.exit(0)
 }
 

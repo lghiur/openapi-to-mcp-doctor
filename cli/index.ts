@@ -1,14 +1,10 @@
 #!/usr/bin/env node
-import { Command, CommanderError } from 'commander'
+import { Command, CommanderError, Option } from 'commander'
 import { MCP_VERSION } from '@/lib/engine/constants'
 import { EXIT_CODES } from '@/lib/engine/constants'
 import { renderDiff } from './commands/diff'
 import { renderHistoryDetail, renderHistoryList } from './commands/history'
 import { aiCapabilityFromEnv, runScan } from './commands/scan'
-
-function parseThreshold(value: unknown): 'high' | 'medium' | 'low' {
-  return value === 'medium' || value === 'low' ? value : 'high'
-}
 
 function buildProgram(): Command {
   const program = new Command()
@@ -27,12 +23,22 @@ function buildProgram(): Command {
     .option('--no-color', 'disable colored output')
     .option('--mcp-version <version>', 'MCP spec version to target', MCP_VERSION)
     .option('--verbose', 'show all findings and agent progress')
-    .option('--mode <mode>', 'lint or fix', 'lint')
-    .option('--confidence-threshold <level>', 'fix mode gate: high | medium | low', 'high')
+    // Enum-valued flags are validated by commander (`choices`): an unknown value
+    // fails fast with INVALID_ARGS instead of being silently coerced to a
+    // default — `--confidence-threshold=meduim` must never become 'high'.
+    .addOption(new Option('--mode <mode>', 'lint or fix').choices(['lint', 'fix']).default('lint'))
+    .addOption(
+      new Option('--confidence-threshold <level>', 'fix mode gate: high | medium | low')
+        .choices(['high', 'medium', 'low'])
+        .default('high'),
+    )
     .option('--output <path>', 'write the patched spec here (fix mode)')
     .option('--route-paths <paths>', 'comma-separated handler files for v2 codebase grounding')
-    .option('--mismatch-mode <mode>', 'flag | fix (v2)', 'flag')
+    .addOption(
+      new Option('--mismatch-mode <mode>', 'flag | fix (v2)').choices(['flag', 'fix']).default('flag'),
+    )
     .option('--no-cache', 'skip the .mcp-doctor.yaml sidecar cache next to the spec')
+    .option('--no-history', 'do not record this run under .mcp-doctor/runs')
     .action(async (spec: string, options: Record<string, unknown>) => {
       const result = await runScan({
         specPath: spec,
@@ -42,7 +48,10 @@ function buildProgram(): Command {
         mcpVersion: typeof options.mcpVersion === 'string' ? options.mcpVersion : undefined,
         verbose: options.verbose === true,
         mode: options.mode === 'fix' ? 'fix' : 'lint',
-        confidenceThreshold: parseThreshold(options.confidenceThreshold),
+        confidenceThreshold:
+          options.confidenceThreshold === 'medium' || options.confidenceThreshold === 'low'
+            ? options.confidenceThreshold
+            : 'high',
         mismatchMode: options.mismatchMode === 'fix' ? 'fix' : 'flag',
         outputPath: typeof options.output === 'string' ? options.output : undefined,
         routePaths:
@@ -54,10 +63,15 @@ function buildProgram(): Command {
             : undefined,
         ai: aiCapabilityFromEnv(process.env),
         cache: options.cache !== false,
+        // Lint runs are recorded under ./.mcp-doctor/runs by default (the
+        // documented `mcp-doctor history` contract); --no-history opts out.
+        ...(options.history !== false ? { historyBaseDir: process.cwd() } : {}),
       })
       if (result.stderr) process.stderr.write(`${result.stderr}\n`)
       process.stdout.write(`${result.stdout}\n`)
-      process.exit(result.exitCode)
+      // exitCode (not process.exit): a hard exit right after write() can
+      // truncate large piped --json output before the stream drains.
+      process.exitCode = result.exitCode
     })
 
   program
@@ -71,7 +85,7 @@ function buildProgram(): Command {
         ? await renderHistoryDetail(baseDir, id, { json: options.json === true })
         : await renderHistoryList(baseDir)
       process.stdout.write(`${output.stdout}\n`)
-      process.exit(output.exitCode)
+      process.exitCode = output.exitCode
     })
 
   program
@@ -81,7 +95,7 @@ function buildProgram(): Command {
     .action(async (id: string) => {
       const output = await renderDiff(process.cwd(), id)
       process.stdout.write(`${output.stdout}\n`)
-      process.exit(output.exitCode)
+      process.exitCode = output.exitCode
     })
 
   return program
@@ -96,12 +110,16 @@ async function main(): Promise<void> {
     await program.parseAsync(process.argv)
   } catch (error) {
     if (error instanceof CommanderError) {
-      // --help / --version exit cleanly; anything else is an argument error.
+      // --help / --version exit cleanly; anything else (missing argument,
+      // invalid --mode/--confidence-threshold/--mismatch-mode choice, unknown
+      // flag) is an argument error — commander has already written the message
+      // to stderr. exitCode, not process.exit(): let pending writes drain.
       const clean =
         error.code === 'commander.helpDisplayed' ||
         error.code === 'commander.version' ||
         error.code === 'commander.help'
-      process.exit(clean ? EXIT_CODES.OK : EXIT_CODES.INVALID_ARGS)
+      process.exitCode = clean ? EXIT_CODES.OK : EXIT_CODES.INVALID_ARGS
+      return
     }
     throw error
   }

@@ -1,14 +1,21 @@
 import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { getServerSession } from 'next-auth'
 import Link from 'next/link'
 import { Header } from '@/components/app-shell/header'
 import { HealthRing, healthLabel } from '@/components/ui/health-ring'
+import { authOptions } from '@/lib/auth'
 import { computeHealthScore } from '@/lib/engine'
 import { getRunStore } from '@/lib/db'
 import { RunFindings, type FindingRowData } from '@/features/history/components/RunFindings'
 
 export default async function RunDetailPage({ params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params
-  const run = getRunStore().getRun(runId)
+  // Ownership check (IDOR guard): only the run's owner may view it. Someone
+  // else's run renders the same "Run not found" as an unknown id, so run ids
+  // cannot be probed. Sessions without an email own nothing.
+  const session = await getServerSession(authOptions)
+  const email = session?.user?.email
+  const run = email ? getRunStore().getRunForUser(runId, email) : null
 
   if (!run) {
     return (

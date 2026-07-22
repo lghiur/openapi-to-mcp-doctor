@@ -1,4 +1,4 @@
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { parseDocument, parse as parseYaml, type Document } from 'yaml'
 import { OPERATIONID_MAX_LENGTH } from '@/lib/engine/constants'
 import type {
   ConfidenceThreshold,
@@ -35,12 +35,35 @@ type FixOp =
   | { op: 'delete'; path: Array<string | number> }
 
 /**
+ * Path segments that reach the prototype chain instead of spec content. A fix
+ * path containing one of these (LLM-emitted paths are prompt-injectable via
+ * spec descriptions) must never be written — plain bracket access on
+ * `__proto__` pollutes `Object.prototype` for the whole process.
+ */
+export const FORBIDDEN_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+])
+
+/** True when any segment of a spec path is a forbidden (prototype-reaching) key. */
+export function hasForbiddenPathSegment(path: ReadonlyArray<unknown>): boolean {
+  return path.some(
+    (segment) => typeof segment === 'string' && FORBIDDEN_PATH_SEGMENTS.has(segment),
+  )
+}
+
+/**
  * Apply eligible fixes to a spec, gated by confidence threshold, emitting
- * version-correct syntax. Preserves YAML-vs-JSON format and key order (comments
- * are not preserved). LOW-confidence fixes always produce a prominent warning.
+ * version-correct syntax. Preserves YAML-vs-JSON format; for YAML specs the
+ * patch is applied to the parsed Document, so comments, anchors and formatting
+ * on untouched nodes survive. LOW-confidence fixes always produce a prominent
+ * warning.
  */
 export function applyFixes(options: ApplyFixesOptions): ApplyFixesResult {
   const isJson = options.spec.trimStart().startsWith('{')
+  // Plain-JS mirror for validation/reads; parseYaml throws on invalid input
+  // exactly as before.
   const doc: unknown = parseYaml(options.spec)
   const applied: Finding[] = []
   const skipped: Finding[] = []
@@ -49,6 +72,10 @@ export function applyFixes(options: ApplyFixesOptions): ApplyFixesResult {
   if (!isRecord(doc)) {
     return { patched: options.spec, applied, skipped: [...options.findings], warnings }
   }
+
+  // For YAML input the Document is the output artifact: mutating it via
+  // setIn/deleteIn keeps comments and formatting everywhere we did not touch.
+  const document = isJson ? null : parseDocument(options.spec)
 
   const minLevel = THRESHOLD_LEVEL[options.threshold]
   const mismatchMode = options.mismatchMode ?? 'flag'
@@ -62,12 +89,25 @@ export function applyFixes(options: ApplyFixesOptions): ApplyFixesResult {
       skipped.push(finding)
       continue
     }
+    // Prototype-pollution guardrail: skip this fix (with a warning), never
+    // throw the whole batch.
+    if (finding.path !== undefined && hasForbiddenPathSegment(finding.path)) {
+      skipped.push(finding)
+      warnings.push(
+        `Skipped fix for ${finding.rule}: its path contains a forbidden path segment ` +
+          '(__proto__/constructor/prototype) and cannot be applied safely.',
+      )
+      continue
+    }
     const ops = deriveFixOps(finding, options.version, doc)
     if (ops === null) {
       skipped.push(finding)
       continue
     }
-    for (const op of ops) applyOp(doc, op)
+    for (const op of ops) {
+      applyOp(doc, op)
+      if (document !== null) applyDocOp(document, op)
+    }
     applied.push(finding)
     if (finding.confidence === 'LOW') {
       const where = finding.operation ?? finding.path?.join('/') ?? finding.rule
@@ -78,7 +118,8 @@ export function applyFixes(options: ApplyFixesOptions): ApplyFixesResult {
     }
   }
 
-  const patched = isJson ? `${JSON.stringify(doc, null, 2)}\n` : stringifyYaml(doc)
+  const patched =
+    document !== null ? document.toString() : `${JSON.stringify(doc, null, 2)}\n`
   return { patched, applied, skipped, warnings }
 }
 
@@ -97,6 +138,9 @@ function deriveFixOps(
 
   if (finding.rule === 'mcp-nullable-deprecated' && version === '3.1' && path && path.length > 0) {
     const schemaPath = path.slice(0, -1)
+    // Same parent-existence validation as the generic branch: a hallucinated
+    // schema location must skip the fix, never count it as applied.
+    if (!isRecord(getIn(doc, schemaPath))) return null
     const currentType = getIn(doc, [...schemaPath, 'type'])
     const newType = Array.isArray(currentType)
       ? [...currentType.filter((t) => t !== 'null'), 'null']
@@ -156,14 +200,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function getIn(root: unknown, path: ReadonlyArray<string | number>): unknown {
   let current: unknown = root
   for (const key of path) {
+    // Defense in depth: never traverse into the prototype chain.
+    if (typeof key === 'string' && FORBIDDEN_PATH_SEGMENTS.has(key)) return undefined
     if (Array.isArray(current) && typeof key === 'number') current = current[key]
-    else if (isRecord(current)) current = current[String(key)]
+    else if (isRecord(current)) current = Object.hasOwn(current, String(key)) ? current[String(key)] : undefined
     else return undefined
   }
   return current
 }
 
 function applyOp(root: Record<string, unknown>, op: FixOp): void {
+  // Defense in depth: the caller already skips findings with forbidden path
+  // segments; a write through one must still be impossible.
+  if (hasForbiddenPathSegment(op.path)) return
   const parentPath = op.path.slice(0, -1)
   const lastKey = op.path[op.path.length - 1]
   if (lastKey === undefined) return
@@ -176,4 +225,17 @@ function applyOp(root: Record<string, unknown>, op: FixOp): void {
     if (Array.isArray(parent) && typeof lastKey === 'number') parent.splice(lastKey, 1)
     else if (isRecord(parent)) delete parent[String(lastKey)]
   }
+}
+
+/**
+ * Mirror of `applyOp` against the YAML Document (the output artifact for YAML
+ * specs). setIn/deleteIn only touch the addressed node, so comments, anchors
+ * and formatting everywhere else survive the fix pass. `deriveFixOps` has
+ * already validated the location against the JS mirror, so setIn never invents
+ * structure beyond the final key.
+ */
+function applyDocOp(document: Document, op: FixOp): void {
+  if (hasForbiddenPathSegment(op.path)) return
+  if (op.op === 'set') document.setIn(op.path, document.createNode(op.value))
+  else document.deleteIn(op.path)
 }

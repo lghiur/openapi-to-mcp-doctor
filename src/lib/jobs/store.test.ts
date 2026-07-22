@@ -3,8 +3,10 @@ import {
   cancelJob,
   createJob,
   getJob,
+  JOB_TTL_MS,
   registerJobAbort,
   setJobStatus,
+  sweepExpiredJobs,
 } from '@/lib/jobs/store'
 
 describe('in-memory job store', () => {
@@ -68,5 +70,45 @@ describe('in-memory job store', () => {
 
   it('cancelJob returns false for an unknown job', () => {
     expect(cancelJob('nope')).toBe(false)
+  })
+})
+
+describe('job TTL eviction', () => {
+  function makeJob() {
+    return createJob({
+      spec: 's',
+      mode: 'lint',
+      mismatchMode: 'flag',
+      confidenceThreshold: 'high',
+    })
+  }
+
+  it('sweeps jobs older than the TTL (including terminal ones)', () => {
+    const job = makeJob()
+    setJobStatus(job.id, 'complete')
+    sweepExpiredJobs(Date.now() + JOB_TTL_MS + 1)
+    expect(getJob(job.id)).toBeUndefined()
+  })
+
+  it('keeps jobs younger than the TTL', () => {
+    const job = makeJob()
+    sweepExpiredJobs(Date.now() + JOB_TTL_MS - 1000)
+    expect(getJob(job.id)).toBeDefined()
+  })
+
+  it('never evicts a running job mid-flight', () => {
+    const job = makeJob()
+    setJobStatus(job.id, 'running')
+    sweepExpiredJobs(Date.now() + JOB_TTL_MS + 1)
+    expect(getJob(job.id)).toBeDefined()
+    setJobStatus(job.id, 'cancelled') // leave no permanent job behind
+  })
+
+  it('createJob sweeps expired jobs on insert, so the map stays bounded', () => {
+    const old = makeJob()
+    const stored = getJob(old.id)
+    if (stored) stored.createdAt = Date.now() - JOB_TTL_MS - 1
+    makeJob()
+    expect(getJob(old.id)).toBeUndefined()
   })
 })

@@ -3,8 +3,19 @@ import type { AgentRecord, AnalysisRun, FindingRecord, Resolution } from '@/type
 
 export interface RunStore {
   saveRun(run: AnalysisRun, userId?: string): void
+  /**
+   * List the given user's runs, newest first. SECURITY: a missing/empty userId
+   * returns NO runs — never the whole table — so a session without an email can
+   * never see other users' history.
+   */
   listRuns(userId?: string): AnalysisRun[]
   getRun(id: string): AnalysisRun | null
+  /**
+   * Fetch a run only if it belongs to `userId`. Returns null both for unknown
+   * ids and for runs owned by someone else, so callers can 404 uniformly
+   * without leaking which run ids exist.
+   */
+  getRunForUser(id: string, userId: string): AnalysisRun | null
   updateResolution(runId: string, findingId: string, resolution: Resolution): void
   /** Record the fix PR opened for a run (the only other post-run mutation). */
   setPrInfo(runId: string, info: { prUrl: string; prBranch: string }): void
@@ -88,11 +99,12 @@ export function openRunStore(file: string): RunStore {
     },
 
     listRuns(userId) {
-      const rows = userId
-        ? (db
-            .prepare('SELECT * FROM analysis_run WHERE user_id = ? ORDER BY created_at DESC')
-            .all(userId) as RunRow[])
-        : (db.prepare('SELECT * FROM analysis_run ORDER BY created_at DESC').all() as RunRow[])
+      // Safe contract: no user, no runs. Listing everything on a missing userId
+      // would leak every user's history to sessions without an email.
+      if (!userId) return []
+      const rows = db
+        .prepare('SELECT * FROM analysis_run WHERE user_id = ? ORDER BY created_at DESC')
+        .all(userId) as RunRow[]
       return rows.map(fromRow)
     },
 
@@ -100,6 +112,14 @@ export function openRunStore(file: string): RunStore {
       const row = db.prepare('SELECT * FROM analysis_run WHERE id = ?').get(id) as
         | RunRow
         | undefined
+      return row ? fromRow(row) : null
+    },
+
+    getRunForUser(id, userId) {
+      if (!userId) return null
+      const row = db
+        .prepare('SELECT * FROM analysis_run WHERE id = ? AND user_id = ?')
+        .get(id, userId) as RunRow | undefined
       return row ? fromRow(row) : null
     },
 

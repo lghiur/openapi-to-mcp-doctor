@@ -1,5 +1,5 @@
 import { parse as parseYaml } from 'yaml'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { applyFixes } from '@/lib/engine/fix/apply'
 import type { Finding } from '@/types/domain'
 
@@ -207,6 +207,145 @@ paths:
     })
     const result = applyFixes({ spec: YAML_SPEC, findings: [f], threshold: 'high', version: '3.0' })
     expect(parseYaml(result.patched).paths['/users'].get.description).toBe('true')
+  })
+})
+
+describe('applyFixes — prototype pollution guard', () => {
+  // If a repro leaks before the guard exists, scrub the prototype so one red
+  // test cannot contaminate the rest of the suite.
+  afterEach(() => {
+    delete (Object.prototype as Record<string, unknown>)['polluted']
+  })
+
+  it('never pollutes Object.prototype via a __proto__ path segment', () => {
+    const f = finding({
+      rule: 'h',
+      confidence: 'HIGH',
+      path: ['__proto__', 'polluted'],
+      after: '"owned"',
+    })
+    const result = applyFixes({ spec: YAML_SPEC, findings: [f], threshold: 'high', version: '3.0' })
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(result.applied).toHaveLength(0)
+    expect(result.skipped.map((s) => s.rule)).toEqual(['h'])
+    expect(result.warnings.join(' ')).toMatch(/forbidden path segment/i)
+  })
+
+  it('rejects constructor/prototype segments anywhere in the path', () => {
+    const f = finding({
+      rule: 'h',
+      confidence: 'HIGH',
+      path: ['constructor', 'prototype', 'polluted'],
+      after: '"owned"',
+    })
+    const result = applyFixes({ spec: YAML_SPEC, findings: [f], threshold: 'high', version: '3.0' })
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(result.applied).toHaveLength(0)
+    expect(result.skipped).toHaveLength(1)
+  })
+
+  it('skips only the unsafe fix and still applies the rest of the batch', () => {
+    const bad = finding({
+      id: 'bad',
+      rule: 'h',
+      confidence: 'HIGH',
+      path: ['paths', '/users', 'get', '__proto__'],
+      after: '"owned"',
+    })
+    const good = finding({
+      id: 'good',
+      rule: 'g',
+      confidence: 'HIGH',
+      path: ['info', 'title'],
+      after: 'Safe',
+    })
+    const result = applyFixes({
+      spec: YAML_SPEC,
+      findings: [bad, good],
+      threshold: 'high',
+      version: '3.0',
+    })
+    expect(result.applied.map((a) => a.id)).toEqual(['good'])
+    expect(result.skipped.map((s) => s.id)).toEqual(['bad'])
+    expect(parseYaml(result.patched).info.title).toBe('Safe')
+  })
+})
+
+describe('applyFixes — YAML comment and formatting preservation', () => {
+  const COMMENTED_SPEC = `openapi: 3.0.3
+info:
+  # The public marketing title — do not change without legal review
+  title: API
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      operationId: get_users
+      # Kept in sync with the billing team's contract
+      description: short
+`
+
+  it('keeps a comment above an untouched sibling key when a fix is applied', () => {
+    const f = finding({ rule: 'h', confidence: 'HIGH', path: ['info', 'version'], after: '2.0.0' })
+    const result = applyFixes({
+      spec: COMMENTED_SPEC,
+      findings: [f],
+      threshold: 'high',
+      version: '3.0',
+    })
+    expect(parseYaml(result.patched).info.version).toBe('2.0.0')
+    expect(result.patched).toContain('# The public marketing title — do not change without legal review')
+    expect(result.patched).toContain("# Kept in sync with the billing team's contract")
+  })
+
+  it('keeps comments elsewhere in the document when a delete-op fix runs', () => {
+    const spec = `openapi: 3.1.0
+# Top-level ownership note
+info:
+  title: API
+  version: 1.0.0
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+`
+    const f = finding({
+      rule: 'mcp-nullable-deprecated',
+      confidence: 'MEDIUM',
+      path: ['components', 'schemas', 'User', 'properties', 'name', 'nullable'],
+    })
+    const result = applyFixes({ spec, findings: [f], threshold: 'medium', version: '3.1' })
+    const name = parseYaml(result.patched).components.schemas.User.properties.name
+    expect(name.type).toEqual(['string', 'null'])
+    expect(name.nullable).toBeUndefined()
+    expect(result.patched).toContain('# Top-level ownership note')
+  })
+})
+
+describe('applyFixes — nullable-deprecated path validation', () => {
+  it('skips a nullable fix whose schema path does not exist (hallucinated location)', () => {
+    const spec = `openapi: 3.1.0
+info:
+  title: API
+  version: 1.0.0
+components:
+  schemas:
+    User:
+      type: object
+`
+    const f = finding({
+      rule: 'mcp-nullable-deprecated',
+      confidence: 'MEDIUM',
+      path: ['components', 'schemas', 'Ghost', 'properties', 'name', 'nullable'],
+    })
+    const result = applyFixes({ spec, findings: [f], threshold: 'medium', version: '3.1' })
+    expect(result.applied).toHaveLength(0)
+    expect(result.skipped).toHaveLength(1)
+    expect(parseYaml(result.patched).components.schemas.Ghost).toBeUndefined()
   })
 })
 

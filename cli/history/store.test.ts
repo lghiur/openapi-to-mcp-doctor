@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -75,5 +75,33 @@ describe('history store', () => {
   it('returns [] when no history directory exists', async () => {
     const dir = await tempDir()
     expect(await listRuns(join(dir, 'nope'))).toEqual([])
+  })
+
+  it('skips files that are valid JSON but not run-shaped', async () => {
+    const dir = await tempDir()
+    await saveRun(run('good', '2026-06-24T00:00:00Z'), dir)
+    const runsDir = join(dir, '.mcp-doctor', 'runs')
+    await writeFile(join(runsDir, 'aaa-bad-object.json'), '{"unexpected": true}\n')
+    await writeFile(join(runsDir, 'aaa-bad-array.json'), '[1, 2, 3]\n')
+    await writeFile(join(runsDir, 'aaa-bad-scalar.json'), '"hello"\n')
+    const runs = await listRuns(dir)
+    expect(runs.map((r) => r.id)).toEqual(['good'])
+  })
+
+  it('skips run files with an unparseable createdAt', async () => {
+    const dir = await tempDir()
+    await saveRun(run('good', '2026-06-24T00:00:00Z'), dir)
+    const runsDir = join(dir, '.mcp-doctor', 'runs')
+    const broken = { ...run('broken', '2026-06-01T00:00:00Z'), createdAt: 'not-a-date' }
+    await writeFile(join(runsDir, 'aaa-broken-date.json'), JSON.stringify(broken))
+    const runs = await listRuns(dir)
+    expect(runs.map((r) => r.id)).toEqual(['good'])
+  })
+
+  it('skips corrupt files without hiding valid ones (getRun still works)', async () => {
+    const dir = await tempDir()
+    await saveRun(run('run-ok', '2026-06-24T00:00:00Z'), dir)
+    await writeFile(join(dir, '.mcp-doctor', 'runs', 'zzz-garbage.json'), 'not json at all')
+    expect((await getRun(dir, 'run-ok'))?.id).toBe('run-ok')
   })
 })

@@ -12,8 +12,14 @@ export function TestConnectionButton() {
 
   async function onClick(): Promise<void> {
     setPending(true)
-    setResult(await testLlmConnection())
-    setPending(false)
+    try {
+      setResult(await testLlmConnection())
+    } catch {
+      setResult({ ok: false, message: 'Connection test failed unexpectedly.' })
+    } finally {
+      // Always re-enable the button — a rejected action must not leave it stuck.
+      setPending(false)
+    }
   }
 
   return (

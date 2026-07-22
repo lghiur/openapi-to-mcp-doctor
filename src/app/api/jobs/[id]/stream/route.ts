@@ -1,6 +1,6 @@
 import { type GroundingRunner, runAnalysis } from '@/lib/engine'
 import { buildAnalysisRun } from '@/lib/engine/history/record'
-import { getOptionalSession } from '@/lib/auth'
+import { getGitHubAccessToken, getOptionalSession } from '@/lib/auth'
 import { getRunStore } from '@/lib/db'
 import { createGitHubClient } from '@/lib/github/client'
 import { encodeSSE, toWireEvent } from '@/lib/jobs/sse'
@@ -8,9 +8,49 @@ import { clearJobAbort, getJob, registerJobAbort, setJobResult, setJobStatus } f
 import { aiCapabilityFromEnv } from '@/lib/llm/capability'
 import type { AnalyzeJob } from '@/lib/jobs/store'
 import type { AnalysisResult } from '@/lib/engine'
+import type { SSEEvent } from '@/types/domain'
 
 interface RouteContext {
   params: Promise<{ id: string }>
+}
+
+const SSE_HEADERS = {
+  'Content-Type': 'text/event-stream',
+  'Cache-Control': 'no-cache, no-transform',
+  Connection: 'keep-alive',
+} as const
+
+/**
+ * Reconstruct the SSE event sequence for a finished run from its stored result,
+ * so a refresh / second tab replays the report instead of re-running the
+ * (LLM-costed) analysis and overwriting the persisted run.
+ */
+function replayEvents(result: AnalysisResult): SSEEvent[] {
+  const events: SSEEvent[] = []
+  for (const agent of result.agents) {
+    events.push({ type: 'agent_started', agentId: agent.id, operations: agent.operations })
+    for (const path of agent.filesRead) events.push({ type: 'file_read', agentId: agent.id, path })
+  }
+  for (const finding of result.findings) {
+    events.push(toWireEvent({ type: 'finding', agentId: finding.agentId, finding }))
+  }
+  for (const agent of result.agents) {
+    events.push({
+      type: 'agent_completed',
+      agentId: agent.id,
+      findingsCount: agent.findingsCount,
+      durationMs: agent.durationMs,
+    })
+  }
+  events.push({
+    type: 'analysis_complete',
+    totalFindings: result.summary.total,
+    errors: result.summary.errors,
+    warnings: result.summary.warnings,
+    info: result.summary.info,
+    durationMs: result.agents.reduce((sum, agent) => sum + agent.durationMs, 0),
+  })
+  return events
 }
 
 /** Assemble and save the history record for a completed authed run. */
@@ -57,6 +97,31 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     })
   }
 
+  // Status guard — a GET must not unconditionally (re-)run the analysis:
+  // - 'complete': replay the stored result as SSE and close. Refresh, a second
+  //   tab, or React StrictMode double-mount get the report without re-running
+  //   the LLM-costed analysis or overwriting the persisted run (which would
+  //   wipe user resolutions).
+  // - 'running': 409. Attaching a second consumer to the in-flight generator
+  //   would need a pub/sub layer; the conflict is the smaller correct change.
+  //   Crucially this path never touches the running job's abort controller or
+  //   status, so a concurrent open cannot corrupt cancel state.
+  // - 'pending' starts the run; 'cancelled'/'error' restart it — that is the
+  //   client's "Try again" path (those states have no stored result to protect).
+  if (job.status === 'complete' && job.result) {
+    const body = ': replay\n\n' + replayEvents(job.result).map(encodeSSE).join('')
+    return new Response(body, { headers: SSE_HEADERS })
+  }
+  if (job.status === 'running') {
+    return new Response('Analysis already in progress for this job.', {
+      status: 409,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    })
+  }
+  // Claim the job synchronously so a concurrent GET sees 'running' and 409s
+  // instead of starting a duplicate analysis.
+  setJobStatus(id, 'running')
+
   // One controller drives both cancel paths: explicit /cancel and client disconnect.
   const abort = new AbortController()
   registerJobAbort(id, abort)
@@ -71,7 +136,9 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   // tab) actually interrupts in-flight gateway requests instead of orphaning them.
   const session = await getOptionalSession()
   const ai = session ? aiCapabilityFromEnv(process.env, { signal }) : undefined
-  const accessToken = session?.accessToken
+  // Server-side only: read the GitHub token from the JWT cookie (it is never on
+  // the session object, which the browser can fetch via /api/auth/session).
+  const accessToken = ai?.runGrounding && job.repo ? await getGitHubAccessToken() : undefined
 
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
@@ -87,8 +154,8 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
       }
 
       // Confirm the pipe immediately so the client knows the stream is live.
+      // (The job was already claimed as 'running' before the stream was built.)
       safeEnqueue(': open\n\n')
-      setJobStatus(id, 'running')
 
       try {
         // Code grounding: for a repo-connected, authenticated run with an LLM, read
@@ -166,11 +233,5 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     },
   })
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    },
-  })
+  return new Response(stream, { headers: SSE_HEADERS })
 }

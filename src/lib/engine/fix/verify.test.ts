@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { verifyFixes } from '@/lib/engine/fix/verify'
+import { filterFindings } from '@/lib/engine/selection'
 import { runStructuralAnalysis } from '@/lib/engine/structural'
 import type { Finding } from '@/types/domain'
 
@@ -122,5 +123,85 @@ describe('verifyFixes', () => {
     })
     expect(result.resolved).toEqual([workerFinding])
     expect(result.unresolved).toEqual([])
+  })
+})
+
+/**
+ * Under an operation selection the baseline findings are selection-filtered, so
+ * the re-lint of the patched spec must be filtered identically — otherwise every
+ * pre-existing out-of-selection finding masquerades as a regression.
+ */
+describe('verifyFixes — operation selection', () => {
+  const TWO_PATH_SPEC = `openapi: 3.0.3
+info:
+  title: Pets
+  version: 1.0.0
+  description: Pet store API.
+  contact:
+    name: Team
+paths:
+  /alpha:
+    get:
+      operationId: AlphaGet
+      summary: Alpha
+      description: Alpha endpoint.
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+  /beta:
+    get:
+      operationId: BetaGet
+      summary: Beta
+      description: Beta endpoint.
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+`
+
+  it('does not report pre-existing out-of-selection findings as regressions', async () => {
+    const selection = [{ path: '/alpha', methods: ['get'] }]
+    const analysis = await runStructuralAnalysis(TWO_PATH_SPEC)
+    const baseline = filterFindings(analysis.findings, selection)
+    const applied = baseline.filter((f) => f.rule === 'mcp-operationid-format')
+    expect(applied.length).toBeGreaterThan(0)
+
+    // Fix only the selected operation; /beta's violation is untouched.
+    const patched = TWO_PATH_SPEC.replace('operationId: AlphaGet', 'operationId: alpha_get')
+    const result = await verifyFixes({
+      patched,
+      applied,
+      originalFindings: baseline,
+      selection,
+    })
+    expect(result.valid).toBe(true)
+    expect(result.resolved.map((f) => f.id)).toEqual(applied.map((f) => f.id))
+    // /beta's pre-existing finding is outside the selection — not a regression.
+    expect(result.regressions).toEqual([])
+  })
+
+  it('still reports in-selection regressions when a selection is set', async () => {
+    const selection = [{ path: '/alpha', methods: ['get'] }]
+    const analysis = await runStructuralAnalysis(TWO_PATH_SPEC)
+    const baseline = filterFindings(analysis.findings, selection)
+    const applied = baseline.filter((f) => f.rule === 'mcp-operationid-format')
+
+    // "Fix" that also breaks the selected operation: drops its operationId.
+    const patched = TWO_PATH_SPEC.replace('      operationId: AlphaGet\n', '')
+    const result = await verifyFixes({
+      patched,
+      applied,
+      originalFindings: baseline,
+      selection,
+    })
+    expect(result.valid).toBe(true)
+    expect(result.regressions.map((f) => f.rule)).toContain('mcp-operationid-required')
   })
 })

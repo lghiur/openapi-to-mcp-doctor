@@ -98,6 +98,62 @@ describe('runScan — output rendering', () => {
   })
 })
 
+describe('runScan — unwritable report/output paths (exit 3, message on stderr)', () => {
+  const missingDir = join(tmpdir(), `mcp-doctor-no-such-dir-${process.pid}`, 'nested')
+
+  it('exits 3 with a stderr message when the --report path is unwritable', async () => {
+    const result = await runScan({
+      specPath: fixture('clean-3.0.yaml'),
+      reportPath: join(missingDir, 'report.json'),
+    })
+    expect(result.exitCode).toBe(3)
+    expect(result.stderr).toMatch(/could not write/i)
+  })
+
+  it('keeps stdout JSON-free when the --report write fails under --json', async () => {
+    const result = await runScan({
+      specPath: fixture('clean-3.0.yaml'),
+      json: true,
+      reportPath: join(missingDir, 'report.json'),
+    })
+    expect(result.exitCode).toBe(3)
+    expect(result.stdout).toBe('')
+  })
+
+  it('exits 3 with a stderr message when the fix-mode --output path is unwritable', async () => {
+    const result = await runScan({
+      specPath: fixture('violations-3.0.yaml'),
+      mode: 'fix',
+      confidenceThreshold: 'high',
+      outputPath: join(missingDir, 'patched.yaml'),
+    })
+    expect(result.exitCode).toBe(3)
+    expect(result.stderr).toMatch(/could not write/i)
+  })
+})
+
+describe('runScan — failure message streams', () => {
+  it('mirrors the unreadable-spec message to stderr under --json', async () => {
+    const result = await runScan({ specPath: fixture('does-not-exist.yaml'), json: true })
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toMatch(/could not read/i) // stable machine contract
+    expect(result.stderr).toMatch(/could not read/i)
+  })
+
+  it('keeps the failure message on stdout only without --json (no duplication)', async () => {
+    const result = await runScan({ specPath: fixture('does-not-exist.yaml') })
+    expect(result.stdout).toMatch(/could not read/i)
+    expect(result.stderr).toBe('')
+  })
+
+  it('mirrors the halt message to stderr under --json (Swagger 2.0)', async () => {
+    const result = await runScan({ specPath: fixture('swagger-2.0.yaml'), json: true })
+    expect(result.exitCode).toBe(2)
+    expect(result.stdout).toMatch(/2\.0|not supported/i)
+    expect(result.stderr).toMatch(/2\.0|not supported/i)
+  })
+})
+
 describe('runScan — fix mode', () => {
   it('writes a patched spec and reports applied/skipped counts (exit 0)', async () => {
     const out = join(tmpdir(), `mcp-doctor-fixed-${process.pid}.yaml`)
@@ -161,6 +217,52 @@ describe('runScan — fix mode', () => {
     })
     expect(result.exitCode).toBe(2)
     expect(result.stdout).toMatch(/verification failed/i)
+  })
+})
+
+describe('runScan — fix mode with --json / --report', () => {
+  it('emits a valid post-fix AnalysisReport JSON on stdout with --json', async () => {
+    const result = await runScan({
+      specPath: fixture('violations-3.0.yaml'),
+      mode: 'fix',
+      confidenceThreshold: 'high',
+      json: true,
+    })
+    expect(result.exitCode).toBe(0)
+    const report = AnalysisReportSchema.parse(JSON.parse(result.stdout))
+    expect(report.mode).toBe('fix')
+    // applied fixes surface as autoFixed findings in the post-fix state
+    expect(report.summary.autoFixed).toBeGreaterThan(0)
+    expect(report.findings.some((f) => f.autoFixed && f.resolution === 'auto-fixed')).toBe(true)
+    // the human lines must not pollute the JSON stdout
+    expect(result.stdout).not.toMatch(/Applied \d+ fix/)
+  })
+
+  it('keeps the human "Applied N fix(es)" line on stderr under --json', async () => {
+    const result = await runScan({
+      specPath: fixture('violations-3.0.yaml'),
+      mode: 'fix',
+      confidenceThreshold: 'high',
+      json: true,
+    })
+    expect(result.stderr).toMatch(/Applied \d+ fix\(es\)/)
+  })
+
+  it('honors --report in fix mode', async () => {
+    const out = join(tmpdir(), `mcp-doctor-fix-report-${process.pid}.json`)
+    tmpFiles.push(out)
+    const result = await runScan({
+      specPath: fixture('violations-3.0.yaml'),
+      mode: 'fix',
+      confidenceThreshold: 'high',
+      reportPath: out,
+    })
+    expect(result.exitCode).toBe(0)
+    // human path is untouched (cli/action.ts parses this from stdout)
+    expect(result.stdout).toMatch(/Applied \d+ fix\(es\), skipped \d+\./)
+    const written = AnalysisReportSchema.parse(JSON.parse(await readFile(out, 'utf8')))
+    expect(written.mode).toBe('fix')
+    expect(written.summary.autoFixed).toBeGreaterThan(0)
   })
 })
 

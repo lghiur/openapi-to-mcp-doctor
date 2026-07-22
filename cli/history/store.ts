@@ -48,9 +48,36 @@ export async function getRun(baseDir: string, id: string): Promise<AnalysisRun |
   return runs.find((r) => r.id === id) ?? null
 }
 
+/**
+ * Lightweight shape guard for a persisted run file. The runs dir is on disk and
+ * user-editable, so a wrong-shape JSON file (hand-edited, truncated, or from a
+ * different tool) must be skipped as corrupt — never crash `history`/`diff`.
+ */
+function isRunShaped(value: unknown): value is Omit<AnalysisRun, 'createdAt'> & {
+  createdAt: string
+} {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const run = value as Record<string, unknown>
+  const summary = run.summary as Record<string, unknown> | undefined
+  return (
+    typeof run.id === 'string' &&
+    typeof run.createdAt === 'string' &&
+    !Number.isNaN(new Date(run.createdAt).getTime()) &&
+    typeof run.specFile === 'string' &&
+    typeof summary === 'object' &&
+    summary !== null &&
+    typeof summary.errors === 'number' &&
+    typeof summary.warnings === 'number' &&
+    typeof summary.info === 'number' &&
+    Array.isArray(run.findings) &&
+    Array.isArray(run.agents)
+  )
+}
+
 async function readRunFile(filePath: string): Promise<AnalysisRun | null> {
   try {
-    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as AnalysisRun
+    const parsed: unknown = JSON.parse(await readFile(filePath, 'utf8'))
+    if (!isRunShaped(parsed)) return null
     return { ...parsed, createdAt: new Date(parsed.createdAt) }
   } catch {
     return null

@@ -65,7 +65,33 @@ const jobs = (globalForJobs.__mcpDoctorJobs ??= new Map<string, AnalyzeJob>())
 /** Abort controllers for in-flight stream runs, so a job can be cancelled. */
 const aborts = (globalForJobs.__mcpDoctorAborts ??= new Map<string, AbortController>())
 
+/**
+ * How long a job (and its full spec text) may live in process memory. Applies
+ * to every non-running status, including terminal ones — a completed job's
+ * result stays replayable for this grace period, then is evicted. Without a
+ * TTL, unauthenticated POST /api/analyze would retain spec text forever.
+ */
+export const JOB_TTL_MS = 30 * 60 * 1000
+
+/**
+ * Evict jobs older than the TTL. Called on every insert, so the map is bounded
+ * by the insert rate within one TTL window. Running jobs are never evicted
+ * mid-flight; they are swept once they reach a terminal state (their next
+ * status change does not reset `createdAt`, so an aged-out job disappears on
+ * the sweep after it finishes).
+ */
+export function sweepExpiredJobs(now: number = Date.now()): void {
+  for (const [id, job] of jobs) {
+    if (job.status === 'running') continue
+    if (now - job.createdAt > JOB_TTL_MS) {
+      jobs.delete(id)
+      aborts.delete(id)
+    }
+  }
+}
+
 export function createJob(input: CreateJobInput): AnalyzeJob {
+  sweepExpiredJobs()
   const job: AnalyzeJob = {
     id: randomUUID(),
     spec: input.spec,

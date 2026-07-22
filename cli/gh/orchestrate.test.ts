@@ -3,11 +3,13 @@ import type { ReportFinding } from '@/types/api'
 import {
   aiAllowedForStrategy,
   behaviorAtLeast,
+  closedLifecycleAction,
   defaultFailOn,
   deltaGateSummary,
   extractAgentFailures,
   findingMarkerKey,
   inlineCommentBody,
+  isPermissionDenied,
   isPrCreationForbidden,
   isSafeGitRef,
   locateFindings,
@@ -378,15 +380,102 @@ describe('renderNewFindingsSection', () => {
 
 describe('isPrCreationForbidden', () => {
   it('matches the 403 "not permitted to create or approve pull requests" error', () => {
-    const err = Object.assign(new Error('GitHub Actions is not permitted to create or approve pull requests.'), { status: 403 })
+    const err = Object.assign(
+      new Error('GitHub Actions is not permitted to create or approve pull requests.'),
+      { status: 403 },
+    )
     expect(isPrCreationForbidden(err)).toBe(true)
   })
 
   it('rejects other 403s, other statuses, and non-errors', () => {
-    expect(isPrCreationForbidden(Object.assign(new Error('Resource not accessible by integration'), { status: 403 }))).toBe(false)
-    expect(isPrCreationForbidden(Object.assign(new Error('GitHub Actions is not permitted to create or approve pull requests.'), { status: 422 }))).toBe(false)
+    expect(
+      isPrCreationForbidden(
+        Object.assign(new Error('Resource not accessible by integration'), { status: 403 }),
+      ),
+    ).toBe(false)
+    expect(
+      isPrCreationForbidden(
+        Object.assign(
+          new Error('GitHub Actions is not permitted to create or approve pull requests.'),
+          { status: 422 },
+        ),
+      ),
+    ).toBe(false)
     expect(isPrCreationForbidden(new Error('boom'))).toBe(false)
     expect(isPrCreationForbidden(undefined)).toBe(false)
+  })
+})
+
+describe('isPermissionDenied', () => {
+  it('matches the 403 "Resource not accessible by integration" error', () => {
+    const err = Object.assign(new Error('Resource not accessible by integration'), { status: 403 })
+    expect(isPermissionDenied(err)).toBe(true)
+  })
+
+  it('matches other 403 not-permitted variants', () => {
+    expect(
+      isPermissionDenied(
+        Object.assign(new Error('Resource not accessible by personal access token'), {
+          status: 403,
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      isPermissionDenied(
+        Object.assign(
+          new Error('GitHub Actions is not permitted to create or approve pull requests.'),
+          { status: 403 },
+        ),
+      ),
+    ).toBe(true)
+  })
+
+  it('rejects non-403s, unrelated 403s, and non-errors', () => {
+    expect(
+      isPermissionDenied(
+        Object.assign(new Error('Resource not accessible by integration'), { status: 404 }),
+      ),
+    ).toBe(false)
+    expect(isPermissionDenied(Object.assign(new Error('rate limited'), { status: 403 }))).toBe(
+      false,
+    )
+    expect(isPermissionDenied(new Error('boom'))).toBe(false)
+    expect(isPermissionDenied(undefined)).toBe(false)
+  })
+})
+
+describe('closedLifecycleAction', () => {
+  it('re-points the fix PR when the source PR was merged', () => {
+    expect(closedLifecycleAction(true)).toBe('repoint')
+  })
+
+  it('closes the fix PR when the source PR was abandoned (unmerged or unknown)', () => {
+    expect(closedLifecycleAction(false)).toBe('close')
+    expect(closedLifecycleAction(undefined)).toBe('close')
+  })
+})
+
+/**
+ * Round-trip tests tying the parsers to the producer formats in
+ * cli/commands/scan.ts. The producer lines below are copied verbatim from the
+ * template literals in `appendProgress` (`✗ ${agentId} failed: ${error}`) and
+ * the fix-mode summary (`Applied ${n} fix(es), skipped ${m}.`). If the
+ * producer format changes, update scan.ts, the parser, AND these literals
+ * together — this suite exists to break loudly when the two sides drift.
+ */
+describe('scan-output contract (cli/commands/scan.ts ↔ orchestrate parsers)', () => {
+  it('round-trips the exact agent-failure line scan.ts emits', () => {
+    const agentId = 'worker-3'
+    const error = 'LLM request failed: 429 rate limited'
+    const producerLine = `✗ ${agentId} failed: ${error}`
+    expect(extractAgentFailures(producerLine)).toEqual([`${agentId} failed: ${error}`])
+  })
+
+  it('round-trips the exact applied-fixes line scan.ts emits', () => {
+    const applied = 3
+    const skipped = 1
+    const producerLine = `Applied ${applied} fix(es), skipped ${skipped}.`
+    expect(parseAppliedFixCount(producerLine)).toBe(applied)
   })
 })
 

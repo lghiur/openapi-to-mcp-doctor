@@ -41,7 +41,8 @@ export async function renderHistoryDetail(
     `Auto-fixed: ${summary.autoFixed}   Accepted: ${summary.accepted}   Rejected: ${summary.rejected}`,
     '',
     'Findings:',
-    ...run.findings.map((f) => `  [${f.severity}] ${f.rule}  ${f.operation}`),
+    // `operation` can be empty (document-level findings) — show a placeholder.
+    ...run.findings.map((f) => `  [${f.severity}] ${f.rule}  ${f.operation || '—'}`),
   ]
   return { stdout: lines.join('\n'), exitCode: EXIT_CODES.OK }
 }

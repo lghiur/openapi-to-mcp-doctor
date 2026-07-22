@@ -72,6 +72,26 @@ describe('mapOperationsToHandlers (Go-first)', () => {
   })
 })
 
+describe('mapOperationsToHandlers — method words inside the path literal', () => {
+  it('matches a method-less registration whose path contains a method word (/delete)', () => {
+    const file = { path: 's.go', content: `r.HandleFunc("/delete", purgeHandler)` }
+    const [result] = mapOperationsToHandlers([op('DELETE', '/delete')], [file])
+    expect(result).toMatchObject({ matched: true, file: 's.go', symbol: 'purgeHandler' })
+  })
+
+  it('does not match a registration pinned to a different method because of the path word', () => {
+    const file = { path: 'app.js', content: `app.get('/delete', listDeletions)` }
+    const [result] = mapOperationsToHandlers([op('DELETE', '/delete')], [file])
+    expect(result?.matched).toBe(false)
+  })
+
+  it('handles /options and /trace the same way', () => {
+    const files = [{ path: 's.go', content: `r.HandleFunc("/options", optionsHandler)` }]
+    const [result] = mapOperationsToHandlers([op('OPTIONS', '/options')], files)
+    expect(result?.matched).toBe(true)
+  })
+})
+
 describe('mapOperationsToHandlers — param syntax variants', () => {
   it('matches gorilla regex-constrained params like {keyName:[^/]*}', () => {
     const file = {

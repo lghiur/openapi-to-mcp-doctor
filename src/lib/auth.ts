@@ -1,5 +1,8 @@
 import { getServerSession, type NextAuthOptions, type Session } from 'next-auth'
+import { getToken } from 'next-auth/jwt'
 import GitHubProvider from 'next-auth/providers/github'
+import { cookies } from 'next/headers'
+import { NextRequest } from 'next/server'
 
 /** Merge a freshly-issued GitHub access token into the JWT (pure, testable). */
 export function withAccessToken<T extends { accessToken?: string }>(
@@ -8,14 +11,6 @@ export function withAccessToken<T extends { accessToken?: string }>(
 ): T {
   if (account?.access_token) return { ...token, accessToken: account.access_token }
   return token
-}
-
-/** Expose the access token on the session for server-side GitHub calls (pure). */
-export function sessionWithAccessToken<S extends object>(
-  session: S,
-  token: { accessToken?: string },
-): S & { accessToken?: string } {
-  return { ...session, accessToken: token.accessToken }
 }
 
 export const authOptions: NextAuthOptions = {
@@ -31,9 +26,11 @@ export const authOptions: NextAuthOptions = {
     jwt({ token, account }) {
       return withAccessToken(token, account)
     },
-    session({ session, token }) {
-      return sessionWithAccessToken(session, token)
-    },
+    // SECURITY: no `session` callback on purpose. The GitHub access token lives
+    // only in the encrypted JWT cookie; copying it onto the session object would
+    // expose it to the browser via GET /api/auth/session (any XSS or extension
+    // could read a repo-scoped token). Server code that needs the token must use
+    // `getGitHubAccessToken()` below.
   },
 }
 
@@ -47,5 +44,28 @@ export async function getOptionalSession(): Promise<Session | null> {
     return await getServerSession(authOptions)
   } catch {
     return null
+  }
+}
+
+/**
+ * Server-only: decrypt the session JWT from the request cookies and return the
+ * GitHub OAuth access token, or undefined when signed out / unconfigured.
+ *
+ * This is the ONLY sanctioned way to obtain the token. It never appears on the
+ * `Session` object, so it can never be serialized to the client.
+ */
+export async function getGitHubAccessToken(): Promise<string | undefined> {
+  try {
+    const jar = await cookies()
+    const cookieHeader = jar
+      .getAll()
+      .map((c) => `${c.name}=${c.value}`)
+      .join('; ')
+    // getToken expects a request; wrap the incoming cookies in a synthetic one.
+    const req = new NextRequest('http://localhost', { headers: { cookie: cookieHeader } })
+    const token = await getToken({ req })
+    return token?.accessToken
+  } catch {
+    return undefined
   }
 }

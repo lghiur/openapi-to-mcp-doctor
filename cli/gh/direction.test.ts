@@ -47,8 +47,24 @@ describe('detectDirection', () => {
     ).toBe(true)
   })
 
-  it('detects spec-shaped files that are not the configured spec path', () => {
+  it('ignores spec-shaped files that are not the configured spec path', () => {
     const result = detectDirection({ changedFiles: ['api/swagger.json'], specPath })
+    expect(result.specChanged).toBe(false)
+    expect(result.strategy).toBe('lint-only')
+  })
+
+  it('falls back to the generic spec pattern only when specPath is unknown', () => {
+    const result = detectDirection({ changedFiles: ['api/swagger.json'] })
+    expect(result.specChanged).toBe(true)
+    expect(result.strategy).toBe('spec-verify')
+  })
+
+  it('counts the pre-rename spec path as a spec change', () => {
+    const result = detectDirection({
+      changedFiles: ['api/openapi.yaml'],
+      specPath: 'spec/openapi.yaml',
+      specRenamedFrom: 'api/openapi.yaml',
+    })
     expect(result.specChanged).toBe(true)
     expect(result.strategy).toBe('spec-verify')
   })

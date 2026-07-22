@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { buildStructuralReport, countOperations, MCP_VERSION, runStructuralAnalysis } from '@/lib/engine'
 import { applyFixes } from '@/lib/engine/fix/apply'
-import { getOptionalSession } from '@/lib/auth'
+import { getGitHubAccessToken } from '@/lib/auth'
 import { getRunStore } from '@/lib/db'
 import { createGitHubClient } from '@/lib/github/client'
 import { buildPrBody, DEFAULT_PR_TITLE } from '@/lib/github/pr'
@@ -16,8 +16,7 @@ import type { Finding, OpenApiVersion } from '@/types/domain'
  * exactly like the patch download route.
  */
 export async function POST(request: Request): Promise<Response> {
-  const session = await getOptionalSession()
-  const token = session?.accessToken
+  const token = await getGitHubAccessToken()
   if (!token) return Response.json({ error: 'Not authenticated.' }, { status: 401 })
 
   const body = (await request.json().catch(() => ({}))) as {

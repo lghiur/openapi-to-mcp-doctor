@@ -19,6 +19,15 @@ const METHOD_VERBS = new Set(['get', 'post', 'put', 'delete', 'patch', 'options'
 const GENERIC_VERBS = new Set(['handlefunc', 'handle', 'route', 'all'])
 
 const REGISTRATION = /(?:^|[^\w.])(\w+)\.(\w+)\(\s*["'`]([^"'`]+)["'`]/g
+
+/**
+ * Receivers that look like HTTP clients or key-value stores rather than routers
+ * (`httpClient.post('/v1/chat')`, `cache.get('/users/1')`). Only consulted for
+ * method-named verbs — generic registration verbs (`HandleFunc`, `route`) do
+ * not exist on clients or maps, so router recall is unaffected.
+ */
+const NON_ROUTER_RECEIVER =
+  /^(?:https?[a-z0-9]*|axios|got|superagent)$|(?:client|fetch|cache|caches|map|store|storage|session|redis)$/i
 const METHOD_TOKEN = /\b(GET|PUT|POST|DELETE|OPTIONS|HEAD|PATCH|TRACE)\b|\bMethod(Get|Put|Post|Delete|Options|Head|Patch|Trace)\b/g
 
 /**
@@ -41,6 +50,9 @@ export function extractRegisteredRoutes(routeFiles: RouteFile[]): RegisteredRout
         let path = match[3] ?? ''
         const isMethodVerb = METHOD_VERBS.has(verb)
         if (!isMethodVerb && !GENERIC_VERBS.has(verb)) continue
+        // `.get(`/`.post(`/`.delete(` also exist on HTTP clients and Maps —
+        // reject receivers that are clearly not routers.
+        if (isMethodVerb && NON_ROUTER_RECEIVER.test(receiver)) continue
 
         // A `+` after the closing quote means the path is built dynamically
         // (`"/"+cfg.HealthCheckEndpointName`) — no static path exists to report.
@@ -222,7 +234,7 @@ export function discoverUndocumentedEndpoints(
     if (existingSpecPath !== undefined) {
       // Path documented, method missing — target the method key directly.
       for (const [method, route] of group.methods) {
-        findings.push(undocumentedFinding([externalPath], method, route, {
+        findings.push(undocumentedFinding([method], method, route, {
           path: ['paths', existingSpecPath, method.toLowerCase()],
           stub: operationStub(method, externalPath, route),
         }))

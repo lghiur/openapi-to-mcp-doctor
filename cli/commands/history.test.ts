@@ -17,12 +17,12 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })))
 })
 
-function run(id: string, iso: string, errors: number): AnalysisRun {
+function run(id: string, iso: string, errors: number, specFile = 'api.yaml'): AnalysisRun {
   return {
     id,
     createdAt: new Date(iso),
     specSource: 'paste',
-    specFile: 'api.yaml',
+    specFile,
     mode: 'lint',
     mismatchMode: 'flag',
     durationMs: 1,
@@ -89,6 +89,16 @@ describe('renderHistoryDetail', () => {
     const dir = await tempDir()
     expect((await renderHistoryDetail(dir, 'nope')).exitCode).toBe(3)
   })
+
+  it('shows an em-dash placeholder for findings without an operation', async () => {
+    const dir = await tempDir()
+    const record = run('run-d', '2026-06-24T00:00:00Z', 1)
+    record.findings = [{ ...record.findings[0]!, operation: '' }]
+    await saveRun(record, dir)
+    const out = await renderHistoryDetail(dir, 'run-d')
+    expect(out.stdout).not.toContain('undefined')
+    expect(out.stdout).toMatch(/mcp-operationid-required\s+—/)
+  })
 })
 
 describe('renderDiff', () => {
@@ -105,5 +115,22 @@ describe('renderDiff', () => {
     const dir = await tempDir()
     await saveRun(run('solo', '2026-06-24T00:00:00Z', 1), dir)
     expect((await renderDiff(dir, 'solo')).stdout).toMatch(/No earlier run/)
+  })
+
+  it('compares against the previous run of the SAME spec, skipping other specs', async () => {
+    const dir = await tempDir()
+    await saveRun(run('a-old', '2026-06-01T00:00:00Z', 5, 'a.yaml'), dir)
+    await saveRun(run('b-mid', '2026-06-10T00:00:00Z', 9, 'b.yaml'), dir)
+    await saveRun(run('a-new', '2026-06-24T00:00:00Z', 2, 'a.yaml'), dir)
+    const out = await renderDiff(dir, 'a-new')
+    expect(out.stdout).toContain('a-old → a-new')
+    expect(out.stdout).toMatch(/Errors:\s+5 → 2 \(-3\)/)
+  })
+
+  it('reports no earlier run when previous runs are all for other specs', async () => {
+    const dir = await tempDir()
+    await saveRun(run('b-old', '2026-06-01T00:00:00Z', 5, 'b.yaml'), dir)
+    await saveRun(run('a-only', '2026-06-24T00:00:00Z', 2, 'a.yaml'), dir)
+    expect((await renderDiff(dir, 'a-only')).stdout).toMatch(/No earlier run/)
   })
 })

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import {
   MCP_VERSION,
   summarizeFindings,
@@ -14,6 +14,7 @@ import {
   hashSpec,
   readSidecar,
   SCHEMA_VERSION,
+  type SidecarCache,
   sidecarPathFor,
   withAnalysisCache,
   writeSidecar,
@@ -119,6 +120,47 @@ const AI_DISABLED_HINT =
   'AI analysis not enabled — set LLM_BASE_URL and LLM_API_TOKEN to enable description and ' +
   'MCP-semantic checks. Running deterministic structural checks only.'
 
+/**
+ * Analysis-failure result (exit 2). The message stays on stdout — that is a
+ * stable machine contract (`cli/action.ts` reads `result.stdout` for the halt
+ * reason on exit 2) — and is mirrored to stderr under `--json` so a human
+ * piping stdout into a JSON parser still sees why nothing was emitted.
+ * Without `--json` the message appears once, on stdout, as before.
+ */
+function analysisFailure(message: string, json: boolean | undefined): ScanResult {
+  return {
+    exitCode: EXIT_CODES.ANALYSIS_FAILED,
+    stdout: message,
+    stderr: json === true ? message : '',
+  }
+}
+
+/**
+ * Write a user-designated output file (`--report` / `--output`). An unwritable
+ * path is a configuration error, not an analysis failure or a findings verdict:
+ * the caller maps a returned error detail to EXIT_CODES.INVALID_ARGS (3),
+ * consistent with the exit-code contract in `lib/engine/constants.ts`.
+ */
+async function tryWriteFile(path: string, content: string): Promise<string | null> {
+  try {
+    await writeFile(path, content)
+    return null
+  } catch (cause) {
+    return cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+/**
+ * A cached sidecar only satisfies a run with the SAME analysis capability:
+ * a structural-only cache must not be served to an AI-enabled run (stale,
+ * silently missing AI findings), and an AI cache must not leak AI findings
+ * into a structural-only run. Absent meta (pre-upgrade sidecars) counts as
+ * `false`, so old caches keep hitting for structural-only runs.
+ */
+function capabilityMatches(cached: SidecarCache, aiOn: boolean, groundingOn: boolean): boolean {
+  return (cached.aiEnabled ?? false) === aiOn && (cached.groundingEnabled ?? false) === groundingOn
+}
+
 export async function runScan(options: ScanOptions): Promise<ScanResult> {
   const now = options.now ?? (() => Date.now())
   const mcpVersion = options.mcpVersion ?? MCP_VERSION
@@ -127,11 +169,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
   try {
     spec = await readFile(options.specPath, 'utf8')
   } catch {
-    return {
-      exitCode: EXIT_CODES.ANALYSIS_FAILED,
-      stdout: `Could not read spec file: ${options.specPath}`,
-      stderr: '',
-    }
+    return analysisFailure(`Could not read spec file: ${options.specPath}`, options.json)
   }
 
   const startedAt = now()
@@ -142,11 +180,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
     ;({ grounding, routeFiles } = await resolveGrounding(options, spec))
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause)
-    return {
-      exitCode: EXIT_CODES.ANALYSIS_FAILED,
-      stdout: `Could not read route files for grounding: ${detail}`,
-      stderr: '',
-    }
+    return analysisFailure(`Could not read route files for grounding: ${detail}`, options.json)
   }
   // Sidecar cache. Ungrounded runs use the spec-hash dimension alone: an
   // unchanged spec reuses the previous findings with zero LLM/Spectral work.
@@ -154,6 +188,10 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
   // changes reuse grounding, handler-only changes re-run just those handlers.
   const specHash = hashSpec(spec)
   const sidecarPath = sidecarPathFor(options.specPath)
+  // Capability of THIS run — cached results from a differently-capable run
+  // never satisfy it (see capabilityMatches).
+  const aiOn = options.ai !== undefined
+  const groundingOn = grounding !== undefined
   let result: AnalysisResult | null = null
 
   if (options.cache === true && options.selection !== undefined) {
@@ -163,7 +201,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
     // scoped run must never write its partial findings back: a later full-spec
     // run would silently reuse them as if they covered the whole document.
     const cached = await readSidecar(sidecarPath)
-    if (cached && cached.specHash === specHash) {
+    if (cached && cached.specHash === specHash && capabilityMatches(cached, aiOn, groundingOn)) {
       const detected = detectVersion(spec)
       if (detected.ok) {
         const selectedLabels = new Set(
@@ -195,6 +233,20 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
   } else if (options.cache === true && grounding !== undefined && routeFiles !== undefined) {
     const detected = detectVersion(spec)
     if (detected.ok) {
+      // withAnalysisCache trusts a matching spec hash for the spec-quality
+      // findings — but only a record produced with the same AI capability may
+      // be trusted. Evict a mismatched sidecar (e.g. structural-only) instead
+      // of silently serving it to this AI-grounded run. Grounding freshness
+      // itself is governed by the per-operation handler hashes, so
+      // `groundingEnabled` needs no check here.
+      const preexisting = await readSidecar(sidecarPath)
+      if (
+        preexisting &&
+        preexisting.specHash === specHash &&
+        (preexisting.aiEnabled ?? false) !== aiOn
+      ) {
+        await rm(sidecarPath, { force: true })
+      }
       const version = detected.version
       const operations = extractOperations(spec)
       const runGround = grounding
@@ -245,6 +297,12 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
           `→ grounding recomputed for ${cached.groundingRecomputed.length} operation(s)`,
         )
       }
+      // withAnalysisCache wrote the sidecar without capability meta — stamp it
+      // so later runs can tell what capability produced this record.
+      const written = await readSidecar(sidecarPath)
+      if (written) {
+        await writeSidecar(sidecarPath, { ...written, aiEnabled: aiOn, groundingEnabled: true })
+      }
       const merged = [...cached.findings, ...Object.values(cached.groundingFindings).flat()]
       result = {
         version,
@@ -256,7 +314,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
     }
   } else if (options.cache === true) {
     const cached = await readSidecar(sidecarPath)
-    if (cached && cached.specHash === specHash) {
+    if (cached && cached.specHash === specHash && capabilityMatches(cached, aiOn, false)) {
       const detected = detectVersion(spec)
       if (detected.ok) {
         result = {
@@ -297,6 +355,8 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
         schemaVersion: SCHEMA_VERSION,
         specHash,
         generatedAt: new Date(now()).toISOString(),
+        aiEnabled: aiOn,
+        groundingEnabled: false,
         findings: result.findings,
         summary: result.summary,
         operations: extractOperations(spec).map((o) => ({ label: o.label })),
@@ -307,7 +367,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
 
   if (result.halted || result.version === null) {
     const reason = result.findings[0]?.message ?? 'Analysis could not proceed.'
-    return { exitCode: EXIT_CODES.ANALYSIS_FAILED, stdout: reason, stderr: '' }
+    return analysisFailure(reason, options.json)
   }
 
   if (options.mode === 'fix') {
@@ -328,19 +388,36 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
             patched: fix.patched,
             applied: fix.applied,
             originalFindings: result.findings,
+            // Scoped runs produce selection-filtered baselines; the re-lint
+            // must be filtered identically or out-of-selection findings would
+            // be misreported as regressions.
+            ...(options.selection !== undefined ? { selection: options.selection } : {}),
           })
         : null
     if (verification !== null && !verification.valid) {
+      const message =
+        '✗ Verification failed — the patched spec is no longer a valid OpenAPI document. ' +
+        'No output written; fixes rejected.'
       return {
         exitCode: EXIT_CODES.ANALYSIS_FAILED,
-        stdout:
-          '✗ Verification failed — the patched spec is no longer a valid OpenAPI document. ' +
-          'No output written; fixes rejected.',
-        stderr: progress.join('\n'),
+        // stdout carries the failure (stable contract; see analysisFailure) and
+        // --json runs get it mirrored onto stderr with the progress log.
+        stdout: message,
+        stderr: (options.json === true ? [...progress, message] : progress).join('\n'),
       }
     }
     if (options.outputPath !== undefined) {
-      await writeFile(options.outputPath, fix.patched)
+      const writeError = await tryWriteFile(options.outputPath, fix.patched)
+      if (writeError !== null) {
+        return {
+          exitCode: EXIT_CODES.INVALID_ARGS,
+          stdout: '',
+          stderr: [
+            ...progress,
+            `Could not write --output file ${options.outputPath}: ${writeError}`,
+          ].join('\n'),
+        }
+      }
     }
     const lines: string[] = []
     if (threshold === 'low') {
@@ -376,6 +453,58 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       )
     }
     lines.push(...fix.warnings)
+
+    // --json / --report in fix mode: emit the post-fix AnalysisReport. Applied
+    // fixes surface as `autoFixed: true` / `resolution: 'auto-fixed'` findings;
+    // skipped findings remain as-is. severity counts cover ALL findings
+    // (applied + skipped); `summary.autoFixed` is the applied count.
+    if (options.json === true || options.reportPath !== undefined) {
+      const postFindings: Finding[] = [
+        ...fix.applied.map((f) => ({ ...f, autoFixed: true, resolution: 'auto-fixed' as const })),
+        ...fix.skipped,
+      ]
+      const base = buildStructuralReport({
+        runId: randomUUID(),
+        timestamp: new Date(now()).toISOString(),
+        specFile: options.specPath,
+        version: result.version,
+        operationCount: countOperations(spec),
+        mcpVersion,
+        mode: 'fix',
+        mismatchMode,
+        durationMs,
+        findings: postFindings,
+        summary: summarizeFindings(postFindings),
+        agents: result.agents,
+      })
+      const report = { ...base, summary: { ...base.summary, autoFixed: fix.applied.length } }
+      const reportJson = JSON.stringify(report, null, 2)
+      if (options.reportPath !== undefined) {
+        const writeError = await tryWriteFile(options.reportPath, `${reportJson}\n`)
+        if (writeError !== null) {
+          return {
+            exitCode: EXIT_CODES.INVALID_ARGS,
+            stdout: '',
+            stderr: [
+              ...progress,
+              `Could not write --report file ${options.reportPath}: ${writeError}`,
+            ].join('\n'),
+          }
+        }
+      }
+      if (options.json === true) {
+        return {
+          exitCode: EXIT_CODES.OK,
+          stdout: reportJson,
+          // the human summary (incl. AGGRESSIVE MODE warnings) moves to stderr
+          // so warnings are never lost while stdout stays pure JSON
+          stderr: [...progress, ...lines].join('\n'),
+        }
+      }
+    }
+
+    // Non-JSON path: byte-compatible with the historical output —
+    // `cli/action.ts` parses `Applied ${n} fix(es)` from this stdout.
     return {
       exitCode: EXIT_CODES.OK,
       stdout: lines.join('\n'),
@@ -399,7 +528,17 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
   })
 
   if (options.reportPath !== undefined) {
-    await writeFile(options.reportPath, `${JSON.stringify(report, null, 2)}\n`)
+    const writeError = await tryWriteFile(options.reportPath, `${JSON.stringify(report, null, 2)}\n`)
+    if (writeError !== null) {
+      return {
+        exitCode: EXIT_CODES.INVALID_ARGS,
+        stdout: '',
+        stderr: [
+          ...progress,
+          `Could not write --report file ${options.reportPath}: ${writeError}`,
+        ].join('\n'),
+      }
+    }
   }
 
   if (options.historyBaseDir !== undefined) {

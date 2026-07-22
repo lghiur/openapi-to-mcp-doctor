@@ -64,10 +64,12 @@ export function hashHandlerFiles(routeFiles: RouteFile[]): string {
 }
 
 /**
- * Per-operation handler hash (label → hash of the exact files its grounding
- * reads: registration site + followed handler definition). An operation whose
- * mapped files are unchanged reuses its cached grounding findings even when
- * other handlers changed. Unmapped operations hash the whole route-file set —
+ * Per-operation grounding reuse key (label → hash). Grounding compares the
+ * operation's spec fragment against its handler code, so the key covers BOTH
+ * sides: the hash of the exact files the grounding reads (registration site +
+ * followed handler definition) mixed with the hash of the operation's spec
+ * fragment — a cached spec⇄code mismatch finding must not be replayed after
+ * either side changed. Unmapped operations hash the whole route-file set —
  * any change there could make them mappable.
  */
 export function hashOperationHandlers(
@@ -77,17 +79,28 @@ export function hashOperationHandlers(
 ): Record<string, string> {
   const candidates = mapOperationsToHandlers(operations, routeFiles, options)
   const allFilesHash = hashHandlerFiles(routeFiles)
+  const specShapeByLabel = new Map(
+    operations.map((operation) => [operation.label, hashOperationSpecShape(operation)]),
+  )
   const hashes: Record<string, string> = {}
   for (const candidate of candidates) {
-    if (!candidate.matched || candidate.file === null) {
-      hashes[candidate.operation] = allFilesHash
-      continue
+    let handlerHash = allFilesHash
+    if (candidate.matched && candidate.file !== null) {
+      const sources = resolveHandlerSources(candidate, routeFiles)
+      if (sources.length > 0) handlerHash = hashHandlerFiles(sources.map((s) => s.file))
     }
-    const sources = resolveHandlerSources(candidate, routeFiles)
-    hashes[candidate.operation] =
-      sources.length > 0 ? hashHandlerFiles(sources.map((s) => s.file)) : allFilesHash
+    hashes[candidate.operation] = createHash('sha256')
+      .update(specShapeByLabel.get(candidate.operation) ?? '')
+      .update('\0')
+      .update(handlerHash)
+      .digest('hex')
   }
   return hashes
+}
+
+/** Hash of the operation's spec fragment — the spec side of the grounding key. */
+function hashOperationSpecShape(operation: OperationRef): string {
+  return createHash('sha256').update(JSON.stringify(operation.definition)).digest('hex')
 }
 
 /**

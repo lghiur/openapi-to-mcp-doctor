@@ -298,16 +298,14 @@ export async function repointOrCloseFixPr(
   return 'repointed'
 }
 
-/**
- * A later push made the fix PR obsolete (spec now clean, or fixes no longer
- * apply): close the open fix PR with an explanatory comment. No-op when no
- * open fix PR exists.
- */
-export async function closeFixPrIfObsolete(
+/** Close the open fix PR for a source branch with an explanatory comment. */
+async function closeOpenFixPr(
   api: StackedPrApi,
-  params: { owner: string; repo: string; sourceBranch: string },
+  owner: string,
+  repo: string,
+  sourceBranch: string,
+  note: string,
 ): Promise<'closed' | 'none'> {
-  const { owner, repo, sourceBranch } = params
   const branch = fixBranchName(sourceBranch)
 
   const open = await api.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}` })
@@ -319,7 +317,46 @@ export async function closeFixPrIfObsolete(
     owner,
     repo,
     issue_number: pr.number,
-    body: `Closing: the latest push to \`${sourceBranch}\` no longer needs these fixes — the spec is clean or the findings were resolved.\n\n🤖 Closed by [MCP Doctor](https://github.com/TykTechnologies/openapi-to-mcp-doctor)`,
+    body: `${note}\n\n🤖 Closed by [MCP Doctor](https://github.com/TykTechnologies/openapi-to-mcp-doctor)`,
   })
   return 'closed'
+}
+
+/**
+ * A later push made the fix PR obsolete (spec now clean, or fixes no longer
+ * apply): close the open fix PR with an explanatory comment. No-op when no
+ * open fix PR exists.
+ */
+export async function closeFixPrIfObsolete(
+  api: StackedPrApi,
+  params: { owner: string; repo: string; sourceBranch: string },
+): Promise<'closed' | 'none'> {
+  const { owner, repo, sourceBranch } = params
+  return closeOpenFixPr(
+    api,
+    owner,
+    repo,
+    sourceBranch,
+    `Closing: the latest push to \`${sourceBranch}\` no longer needs these fixes — the spec is clean or the findings were resolved.`,
+  )
+}
+
+/**
+ * The source PR was closed WITHOUT merging: its branch's spec content was
+ * abandoned, so the stacked fix PR must be closed — never re-pointed at the
+ * base branch, which would propose the abandoned branch's content there.
+ * No-op when no open fix PR exists.
+ */
+export async function closeFixPrForAbandonedSource(
+  api: StackedPrApi,
+  params: { owner: string; repo: string; sourceBranch: string },
+): Promise<'closed' | 'none'> {
+  const { owner, repo, sourceBranch } = params
+  return closeOpenFixPr(
+    api,
+    owner,
+    repo,
+    sourceBranch,
+    `Closing: the source PR for \`${sourceBranch}\` was closed without merging, so these spec fixes no longer apply anywhere.`,
+  )
 }

@@ -103,9 +103,9 @@ export default async function ReportPage({ params }: { params: Promise<{ jobId: 
               {tone.label}
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              OpenAPI {model.summary.total === 0 ? '' : `${job.result.version ?? '—'} · `}
-              {model.summary.total} finding{model.summary.total === 1 ? '' : 's'} across {totalOps}{' '}
-              operation{totalOps === 1 ? '' : 's'} — {cleanOps} clean, {flaggedOps} flagged.
+              OpenAPI {job.result.version ?? '—'} · {model.summary.total} finding
+              {model.summary.total === 1 ? '' : 's'} across {totalOps} operation
+              {totalOps === 1 ? '' : 's'} — {cleanOps} clean, {flaggedOps} flagged.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Stat tone="error" label="errors" value={model.summary.errors} />

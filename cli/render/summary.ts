@@ -1,6 +1,21 @@
 import type { AnalysisReport } from '@/types/api'
+import type { Severity } from '@/types/domain'
 
 export type FailOn = 'error' | 'warning' | 'never'
+
+/**
+ * One-line, pipe-safe, mention-safe markdown table cell for untrusted
+ * spec/LLM-derived text. Deliberately replicated from `cli/gh/orchestrate.ts`
+ * (`mdCell`) rather than imported — `cli/render/` stays dependency-light.
+ */
+function cell(value: string): string {
+  return value
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .replace(/@(?=\w)/g, '@\u200b')
+}
+
+const SEVERITY_RANK: Record<Severity, number> = { error: 0, warning: 1, info: 2 }
 
 /** Render the GitHub Actions Job Summary markdown (docs/research/ux-design.md). */
 export function renderJobSummary(report: AnalysisReport): string {
@@ -13,11 +28,14 @@ export function renderJobSummary(report: AnalysisReport): string {
     )
     .join('\n')
 
-  const topFindings = report.findings
+  // Errors first (then warnings, then info) so severe findings never fall off
+  // the top-10 slice; Array#sort is stable, so emission order holds per group.
+  const topFindings = [...report.findings]
+    .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
     .slice(0, 10)
     .map(
       (finding) =>
-        `| \`${finding.operation ?? '—'}\` | ${finding.rule} | ${finding.severity} | ${finding.confidence} |`,
+        `| \`${cell(finding.operation ?? '—')}\` | ${cell(finding.rule)} | ${finding.severity} | ${finding.confidence} |`,
     )
     .join('\n')
 

@@ -23,6 +23,11 @@ describe('POST /api/analyze', () => {
     expect((await POST(postRequest({ spec: '' }))).status).toBe(400)
   })
 
+  it('rejects a spec larger than 5 MB with 413 (memory-bound, unauthenticated endpoint)', async () => {
+    const res = await POST(postRequest({ spec: 'a'.repeat(5 * 1024 * 1024 + 1) }))
+    expect(res.status).toBe(413)
+  })
+
   it('rejects invalid JSON with 400', async () => {
     const res = await POST(
       new Request('http://localhost/api/analyze', { method: 'POST', body: '{not json' }),

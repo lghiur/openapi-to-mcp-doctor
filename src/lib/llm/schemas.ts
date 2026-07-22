@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { hasForbiddenPathSegment } from '@/lib/engine/fix/apply'
 import { WORKER_RULES, normalizeRule } from '@/lib/engine/workers/rules'
 
 /**
@@ -6,8 +7,20 @@ import { WORKER_RULES, normalizeRule } from '@/lib/engine/workers/rules'
  * the rest of the engine receives typed, trusted data — never `any`.
  */
 
-export const LlmSeveritySchema = z.enum(['error', 'warning', 'info'])
-export const LlmConfidenceSchema = z.enum(['HIGH', 'MEDIUM', 'LOW'])
+/**
+ * Models drift on enum casing ("Warning", "high"). Like rule-name
+ * normalization, casing is normalized forgivingly — one sloppy value must not
+ * fail the whole worker batch. `z.toJSONSchema` still advertises the canonical
+ * casing to the model.
+ */
+export const LlmSeveritySchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.toLowerCase() : value),
+  z.enum(['error', 'warning', 'info']),
+)
+export const LlmConfidenceSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.toUpperCase() : value),
+  z.enum(['HIGH', 'MEDIUM', 'LOW']),
+)
 
 /**
  * A spec value the model was asked to return as a string. Models routinely
@@ -47,6 +60,35 @@ const WorkerRuleSchema = z.preprocess(
   z.enum(WORKER_RULES),
 )
 
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Drop output entries whose `path` contains a forbidden segment (`__proto__`,
+ * `constructor`, `prototype`). LLM-emitted paths are prompt-injectable via spec
+ * descriptions, and downstream fix application walks them with bracket access —
+ * so the pollution vector is closed here at the boundary too. Fail-soft, like
+ * rule normalization: the poisoned entry is dropped (the count is the
+ * difference between the raw and parsed array lengths), never the whole batch.
+ */
+function withoutUnsafePaths<Schema extends z.ZodType>(item: Schema) {
+  return z.preprocess(
+    (value) =>
+      Array.isArray(value)
+        ? value.filter(
+            (entry) =>
+              !(
+                isRecordValue(entry) &&
+                Array.isArray(entry.path) &&
+                hasForbiddenPathSegment(entry.path)
+              ),
+          )
+        : value,
+    z.array(item),
+  )
+}
+
 /** One finding produced by a worker agent for a single operation. */
 export const LlmFindingSchema = z.object({
   operation: z.string(),
@@ -63,7 +105,7 @@ export type LlmFinding = z.infer<typeof LlmFindingSchema>
 
 /** A worker agent's full output for its batch of operations. */
 export const WorkerOutputSchema = z.object({
-  findings: z.array(LlmFindingSchema),
+  findings: withoutUnsafePaths(LlmFindingSchema),
 })
 
 export type WorkerOutput = z.infer<typeof WorkerOutputSchema>
@@ -90,7 +132,7 @@ export const SuggestionSchema = z.object({
 
 /** The fix-suggester's output for one chunk of structural findings. */
 export const SuggestionOutputSchema = z.object({
-  suggestions: z.array(SuggestionSchema),
+  suggestions: withoutUnsafePaths(SuggestionSchema),
 })
 
 export type SuggestionOutput = z.infer<typeof SuggestionOutputSchema>
@@ -105,7 +147,7 @@ export const MismatchSchema = z.object({
 })
 
 export const MismatchOutputSchema = z.object({
-  mismatches: z.array(MismatchSchema),
+  mismatches: withoutUnsafePaths(MismatchSchema),
 })
 
 export type MismatchOutput = z.infer<typeof MismatchOutputSchema>

@@ -3,7 +3,7 @@ import { createJob, setJobResult } from '@/lib/jobs/store'
 import type { Finding } from '@/types/domain'
 
 vi.mock('@/lib/auth', () => ({
-  getOptionalSession: vi.fn(),
+  getGitHubAccessToken: vi.fn(),
 }))
 vi.mock('@/lib/github/client', () => ({
   createGitHubClient: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock('@/lib/db', async () => {
   return { getRunStore: () => store }
 })
 
-import { getOptionalSession } from '@/lib/auth'
+import { getGitHubAccessToken } from '@/lib/auth'
 import { getRunStore } from '@/lib/db'
 import { createGitHubClient } from '@/lib/github/client'
 import { buildAnalysisRun } from '@/lib/engine/history/record'
@@ -81,16 +81,14 @@ function prRequest(body: unknown): Request {
 }
 
 function signIn(): void {
-  vi.mocked(getOptionalSession).mockResolvedValue({
-    accessToken: 'gh-token',
-    expires: '2099-01-01',
-  } as never)
+  // The token comes from the server-only JWT helper, never from the session.
+  vi.mocked(getGitHubAccessToken).mockResolvedValue('gh-token')
 }
 
 const createFixPr = vi.fn()
 
 beforeEach(() => {
-  vi.mocked(getOptionalSession).mockReset()
+  vi.mocked(getGitHubAccessToken).mockReset()
   vi.mocked(createGitHubClient).mockReset()
   createFixPr.mockReset()
   createFixPr.mockResolvedValue({ url: 'https://github.com/tyk/petstore/pull/7', number: 7 })
@@ -99,7 +97,7 @@ beforeEach(() => {
 
 describe('POST /api/github/pr', () => {
   it('returns 401 when not authenticated', async () => {
-    vi.mocked(getOptionalSession).mockResolvedValue(null)
+    vi.mocked(getGitHubAccessToken).mockResolvedValue(undefined)
     const job = repoJob()
     const res = await POST(prRequest({ jobId: job.id, acceptedIds: [ACCEPTED_FINDING.id] }))
     expect(res.status).toBe(401)

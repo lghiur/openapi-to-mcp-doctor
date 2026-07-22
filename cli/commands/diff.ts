@@ -7,18 +7,17 @@ function delta(current: number, previous: number): string {
   return change > 0 ? `+${change}` : `${change}`
 }
 
-/** `mcp-doctor diff <id>` — compare a run to the chronologically previous one. */
+/** `mcp-doctor diff <id>` — compare a run to the previous run of the SAME spec. */
 export async function renderDiff(baseDir: string, id: string): Promise<CommandOutput> {
   const runs = await listRuns(baseDir) // newest first
   const index = runs.findIndex((r) => r.id === id)
-  if (index === -1) {
-    return { stdout: `Run not found: ${id}`, exitCode: EXIT_CODES.INVALID_ARGS }
-  }
   const current = runs[index]
-  const previous = runs[index + 1]
-  if (!current) {
+  if (index === -1 || !current) {
     return { stdout: `Run not found: ${id}`, exitCode: EXIT_CODES.INVALID_ARGS }
   }
+  // Comparing across different spec files would produce a meaningless delta —
+  // only an earlier run of the same spec is a valid baseline.
+  const previous = runs.slice(index + 1).find((r) => r.specFile === current.specFile)
   if (!previous) {
     return { stdout: `No earlier run to compare ${id} against.`, exitCode: EXIT_CODES.OK }
   }

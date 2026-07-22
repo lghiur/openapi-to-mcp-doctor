@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  closeFixPrForAbandonedSource,
   closeFixPrIfObsolete,
   ensureStackedFixPr,
   fixBranchName,
@@ -422,6 +423,47 @@ describe('closeFixPrIfObsolete', () => {
     })
 
     const outcome = await closeFixPrIfObsolete(repo.api, params)
+
+    expect(outcome).toBe('none')
+    expect(repo.comments).toHaveLength(0)
+  })
+})
+
+describe('closeFixPrForAbandonedSource', () => {
+  const params = { owner: 'o', repo: 'r', sourceBranch: 'feature-x' }
+
+  it('closes the fix PR with an abandoned-source note, without re-pointing it', async () => {
+    const repo = fakeRepo({
+      branches: { 'feature-x': { 'api/openapi.yaml': 'openapi: 3.0.0\n' } },
+    })
+    const pr: FakePr = {
+      number: 5,
+      html_url: 'https://pr/5',
+      state: 'open',
+      head: { ref: 'feature-x-mcp-doctor-fixes' },
+      base: { ref: 'feature-x' },
+      title: 'Fix spec',
+      body: 'Body',
+    }
+    repo.prs.push(pr)
+
+    const outcome = await closeFixPrForAbandonedSource(repo.api, params)
+
+    expect(outcome).toBe('closed')
+    expect(pr.state).toBe('closed')
+    // Never re-pointed at another base — the abandoned branch's content must
+    // not be proposed into the base branch.
+    expect(pr.base.ref).toBe('feature-x')
+    expect(repo.comments).toHaveLength(1)
+    expect(repo.comments[0]).toContain('closed without merging')
+  })
+
+  it('returns none when no open fix PR exists', async () => {
+    const repo = fakeRepo({
+      branches: { 'feature-x': { 'api/openapi.yaml': 'openapi: 3.0.0\n' } },
+    })
+
+    const outcome = await closeFixPrForAbandonedSource(repo.api, params)
 
     expect(outcome).toBe('none')
     expect(repo.comments).toHaveLength(0)

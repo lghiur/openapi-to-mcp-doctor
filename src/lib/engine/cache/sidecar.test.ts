@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +67,53 @@ describe('readSidecar / writeSidecar', () => {
   it('returns null for a missing sidecar', async () => {
     const dir = await tempDir()
     expect(await readSidecar(join(dir, 'nope.yaml'))).toBeNull()
+  })
+})
+
+/**
+ * The sidecar is a committed/committable file an attacker (or a merge accident)
+ * can poison. A malformed record must read as a cache miss — never crash the
+ * run or spoof findings into the report.
+ */
+describe('readSidecar — shape validation', () => {
+  async function poisoned(content: string): Promise<string> {
+    const dir = await tempDir()
+    const path = join(dir, '.mcp-doctor.yaml')
+    await writeFile(path, content)
+    return path
+  }
+
+  it('treats findings that are not an array as a cache miss', async () => {
+    const path = await poisoned(
+      `schemaVersion: 2\nspecHash: abc\ngeneratedAt: '2026-01-01'\nfindings: not-an-array\nsummary:\n  total: 0\n  errors: 0\n  warnings: 0\n  info: 0\noperations: []\n`,
+    )
+    expect(await readSidecar(path)).toBeNull()
+  })
+
+  it('treats spoofed finding entries (wrong field types) as a cache miss', async () => {
+    const path = await poisoned(
+      `schemaVersion: 2\nspecHash: abc\ngeneratedAt: '2026-01-01'\nfindings:\n  - id: f1\n    severity:\n      evil: true\nsummary:\n  total: 1\n  errors: 1\n  warnings: 0\n  info: 0\noperations: []\n`,
+    )
+    expect(await readSidecar(path)).toBeNull()
+  })
+
+  it('treats a missing summary as a cache miss', async () => {
+    const path = await poisoned(
+      `schemaVersion: 2\nspecHash: abc\ngeneratedAt: '2026-01-01'\nfindings: []\noperations: []\n`,
+    )
+    expect(await readSidecar(path)).toBeNull()
+  })
+
+  it('treats malformed operations entries as a cache miss', async () => {
+    const path = await poisoned(
+      `schemaVersion: 2\nspecHash: abc\ngeneratedAt: '2026-01-01'\nfindings: []\nsummary:\n  total: 0\n  errors: 0\n  warnings: 0\n  info: 0\noperations:\n  - 42\n`,
+    )
+    expect(await readSidecar(path)).toBeNull()
+  })
+
+  it('never throws on scalar or garbage YAML content', async () => {
+    expect(await readSidecar(await poisoned('just a string'))).toBeNull()
+    expect(await readSidecar(await poisoned('42'))).toBeNull()
   })
 })
 

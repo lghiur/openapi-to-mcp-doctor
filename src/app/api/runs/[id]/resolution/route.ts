@@ -26,8 +26,14 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     return Response.json({ error: 'Invalid resolution request.' }, { status: 400 })
   }
 
+  // Ownership check (IDOR guard): only the run's owner may mutate it. A run
+  // owned by someone else answers 404 — identical to "does not exist" — so
+  // authenticated users cannot probe which run ids are valid. Sessions without
+  // an email own nothing.
+  const email = session.user?.email
   const store = getRunStore()
-  if (!store.getRun(id)) return Response.json({ error: 'Run not found.' }, { status: 404 })
+  const run = email ? store.getRunForUser(id, email) : null
+  if (!run) return Response.json({ error: 'Run not found.' }, { status: 404 })
 
   store.updateResolution(id, findingId, resolution.data)
   return Response.json({ ok: true })

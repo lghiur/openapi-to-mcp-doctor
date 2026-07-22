@@ -71,6 +71,93 @@ describe('renderJobSummary', () => {
   })
 })
 
+describe('renderJobSummary — untrusted cell escaping', () => {
+  const hostile: AnalysisReport = {
+    ...report,
+    findings: [
+      {
+        id: 'h1',
+        agentId: 'structural-linter',
+        operation: 'GET /a|b\nc @octocat',
+        rule: 'EVIL|RULE\n@team',
+        severity: 'error',
+        confidence: 'HIGH',
+        message: 'x',
+        autoFixed: false,
+        resolution: 'pending',
+      },
+    ],
+  }
+
+  it('escapes pipes so hostile values cannot break the table', () => {
+    const md = renderJobSummary(hostile)
+    expect(md).toContain('a\\|b')
+    expect(md).toContain('EVIL\\|RULE')
+  })
+
+  it('flattens newlines inside cells', () => {
+    const md = renderJobSummary(hostile)
+    const findingRow = md.split('\n').find((line) => line.includes('EVIL'))
+    expect(findingRow).toBeDefined()
+    expect(findingRow).toContain('c @')
+  })
+
+  it('neutralizes @mentions in cells', () => {
+    const md = renderJobSummary(hostile)
+    expect(md).not.toContain('@octocat')
+    expect(md).not.toContain('@team')
+    expect(md).toContain('@\u200bocto')
+  })
+})
+
+describe('renderJobSummary — top findings ordering', () => {
+  it('sorts findings error > warning > info before slicing the top 10', () => {
+    const finding = (id: string, severity: 'error' | 'warning' | 'info') => ({
+      id,
+      agentId: 'structural-linter',
+      operation: `GET /${id}`,
+      rule: `RULE_${id.toUpperCase()}`,
+      severity,
+      confidence: 'HIGH' as const,
+      message: 'm',
+      autoFixed: false,
+      resolution: 'pending' as const,
+    })
+    // ten info findings first in emission order, then one error — without the
+    // sort, the error falls off the top-10 slice.
+    const many: AnalysisReport = {
+      ...report,
+      findings: [
+        ...Array.from({ length: 10 }, (_, i) => finding(`i${i}`, 'info')),
+        finding('w1', 'warning'),
+        finding('e1', 'error'),
+      ],
+    }
+    const md = renderJobSummary(many)
+    expect(md).toContain('RULE_E1')
+    expect(md).toContain('RULE_W1')
+    const errorAt = md.indexOf('RULE_E1')
+    const warningAt = md.indexOf('RULE_W1')
+    expect(errorAt).toBeLessThan(warningAt)
+  })
+
+  it('keeps emission order within the same severity (stable sort)', () => {
+    const finding = (id: string) => ({
+      id,
+      agentId: 'structural-linter',
+      operation: `GET /${id}`,
+      rule: `RULE_${id.toUpperCase()}`,
+      severity: 'warning' as const,
+      confidence: 'HIGH' as const,
+      message: 'm',
+      autoFixed: false,
+      resolution: 'pending' as const,
+    })
+    const md = renderJobSummary({ ...report, findings: [finding('first'), finding('second')] })
+    expect(md.indexOf('RULE_FIRST')).toBeLessThan(md.indexOf('RULE_SECOND'))
+  })
+})
+
 describe('failOnGate', () => {
   const summary = { errors: 2, warnings: 5, info: 1 }
   it('fails on errors when fail-on=error', () => {

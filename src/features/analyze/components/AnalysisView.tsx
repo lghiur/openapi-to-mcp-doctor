@@ -58,10 +58,18 @@ const SEVERITY_RANK: Record<Severity, number> = { error: 3, warning: 2, info: 1 
 /** Tick a live elapsed timer (seconds) until `stop` is true. */
 function useElapsed(stop: boolean, finalMs?: number): string {
   const [seconds, setSeconds] = useState(0)
+  const [prevStop, setPrevStop] = useState(stop)
   const start = useRef<number | null>(null)
+  // Restart the clock whenever a run (re)starts — a retry must not resume the
+  // previous run's elapsed time. Done during render (not in the effect) per the
+  // "adjusting state when a prop changes" pattern.
+  if (prevStop !== stop) {
+    setPrevStop(stop)
+    if (!stop) setSeconds(0)
+  }
   useEffect(() => {
     if (stop) return
-    if (start.current === null) start.current = performance.now()
+    start.current = performance.now()
     const id = setInterval(() => {
       if (start.current !== null) setSeconds((performance.now() - start.current) / 1000)
     }, 100)

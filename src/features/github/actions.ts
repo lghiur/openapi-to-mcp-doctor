@@ -1,8 +1,7 @@
 'use server'
 
-import { getServerSession } from 'next-auth'
 import { redirect } from 'next/navigation'
-import { authOptions } from '@/lib/auth'
+import { getGitHubAccessToken } from '@/lib/auth'
 import { extractOperations } from '@/lib/engine'
 import { createGitHubClient } from '@/lib/github/client'
 import { buildPrBody, DEFAULT_PR_TITLE } from '@/lib/github/pr'
@@ -29,8 +28,7 @@ export async function listSpecOperations(input: {
   branch: string
   path: string
 }): Promise<ListSpecOperationsResult> {
-  const session = await getServerSession(authOptions)
-  const token = session?.accessToken
+  const token = await getGitHubAccessToken()
   if (!token) return { ok: false, error: 'Not authenticated.' }
 
   const [owner, repo] = input.repo.split('/')
@@ -71,8 +69,7 @@ function parseSelection(formData: FormData): OperationSelection | undefined {
 
 /** Read a spec from a connected repo, create a job, and open its analysis view. */
 export async function analyzeRepoSpec(formData: FormData): Promise<void> {
-  const session = await getServerSession(authOptions)
-  const token = session?.accessToken
+  const token = await getGitHubAccessToken()
   if (!token) redirect('/?next=dashboard')
 
   const fullName = String(formData.get('repo') ?? '')
@@ -114,8 +111,7 @@ export interface CreateFixPrInput {
 export async function createFixPr(
   input: CreateFixPrInput,
 ): Promise<{ url: string; number: number }> {
-  const session = await getServerSession(authOptions)
-  const token = session?.accessToken
+  const token = await getGitHubAccessToken()
   if (!token) throw new Error('Not authenticated.')
 
   const [owner, repo] = input.repo.split('/')

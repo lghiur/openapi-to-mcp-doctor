@@ -14,8 +14,24 @@ concurrency:
   group: mcp-doctor-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Permissions per behavior level (cumulative — pick the block for the level
+# you set below; the action degrades with a warning if the token lacks a
+# scope, e.g. fix-pr without contents: write cannot push the fix branch):
+#
+#   behavior: summary
+#     contents: read
+#
+#   behavior: comment | review
+#     contents: read
+#     pull-requests: write
+#
+#   behavior: fix-pr
+#     contents: write        # push the fix branch
+#     pull-requests: write   # open the stacked fix PR (also enable
+#                            # "Allow GitHub Actions to create and approve
+#                            # pull requests" under Settings → Actions)
 permissions:
-  contents: read # summary level; fix-pr needs contents: write
+  contents: read # for behavior: fix-pr, change to `contents: write`
   pull-requests: write # comment / review / fix-pr levels
 
 jobs:

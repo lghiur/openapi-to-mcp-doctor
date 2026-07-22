@@ -59,8 +59,11 @@ function context(id: string) {
   return { params: Promise.resolve({ id }) }
 }
 
-function signIn(): void {
-  vi.mocked(getOptionalSession).mockResolvedValue({ expires: '2099-01-01' } as never)
+function signIn(email?: string): void {
+  vi.mocked(getOptionalSession).mockResolvedValue({
+    ...(email ? { user: { email } } : {}),
+    expires: '2099-01-01',
+  } as never)
 }
 
 beforeEach(() => {
@@ -78,7 +81,7 @@ describe('POST /api/runs/[id]/resolution', () => {
   })
 
   it('returns 404 for an unknown run', async () => {
-    signIn()
+    signIn('dev@tyk.io')
     const res = await POST(
       resolutionRequest({ findingId: 'find-1', resolution: 'accepted' }),
       context('missing'),
@@ -87,7 +90,7 @@ describe('POST /api/runs/[id]/resolution', () => {
   })
 
   it('rejects an invalid resolution value', async () => {
-    signIn()
+    signIn('dev@tyk.io')
     getRunStore().saveRun(sampleRun('run-bad'), 'dev@tyk.io')
     const res = await POST(
       resolutionRequest({ findingId: 'find-1', resolution: 'maybe' }),
@@ -96,8 +99,31 @@ describe('POST /api/runs/[id]/resolution', () => {
     expect(res.status).toBe(400)
   })
 
-  it('updates the finding resolution and recomputed counts', async () => {
+  it("404s when mutating another user's run (IDOR guard, no id probing)", async () => {
+    signIn('attacker@tyk.io')
+    getRunStore().saveRun(sampleRun('run-owned'), 'owner@tyk.io')
+    const res = await POST(
+      resolutionRequest({ findingId: 'find-1', resolution: 'accepted' }),
+      context('run-owned'),
+    )
+    // 404, not 403: a foreign run must be indistinguishable from a missing one
+    expect(res.status).toBe(404)
+    expect(getRunStore().getRun('run-owned')?.findings[0]?.resolution).toBe('pending')
+  })
+
+  it('404s for a session without an email — it owns nothing', async () => {
     signIn()
+    getRunStore().saveRun(sampleRun('run-noemail'), 'owner@tyk.io')
+    const res = await POST(
+      resolutionRequest({ findingId: 'find-1', resolution: 'accepted' }),
+      context('run-noemail'),
+    )
+    expect(res.status).toBe(404)
+    expect(getRunStore().getRun('run-noemail')?.findings[0]?.resolution).toBe('pending')
+  })
+
+  it('updates the finding resolution and recomputed counts', async () => {
+    signIn('dev@tyk.io')
     getRunStore().saveRun(sampleRun('run-1'), 'dev@tyk.io')
     const res = await POST(
       resolutionRequest({ findingId: 'find-1', resolution: 'accepted' }),

@@ -65,6 +65,36 @@ def pets():
     expect(extractRegisteredRoutes([file])).toEqual([])
   })
 
+  it('ignores HTTP-client calls (receivers named *client, http*, axios, fetch)', () => {
+    const files = [
+      { path: 'llm.ts', content: `const res = await httpClient.post('/v1/chat', body)` },
+      { path: 'users.ts', content: `const users = await axios.get('/v1/users')` },
+      { path: 'py.py', content: `resp = httpx.get('/v1/things')` },
+      { path: 'fetch.ts', content: `apiFetch.delete('/v1/items/1')` },
+    ]
+    expect(extractRegisteredRoutes(files)).toEqual([])
+  })
+
+  it('ignores Map/cache/store get and delete calls with path-like keys', () => {
+    const files = [
+      { path: 'a.ts', content: `cache.get('/users/1')` },
+      { path: 'b.ts', content: `routeMap.delete('/tmp/x')` },
+      { path: 'c.ts', content: `sessionStore.get('/session/abc')` },
+    ]
+    expect(extractRegisteredRoutes(files)).toEqual([])
+  })
+
+  it('still extracts real router registrations with router-ish receivers', () => {
+    const files = [
+      { path: 'routes.ts', content: `apiRouter.post('/v2/things', createThing)` },
+      { path: 'srv.go', content: `mux.HandleFunc("GET /v2/orders", listOrders)` },
+    ]
+    expect(extractRegisteredRoutes(files)).toEqual([
+      { method: 'POST', path: '/v2/things', file: 'routes.ts', line: 1, receiver: 'apiRouter' },
+      { method: 'GET', path: '/v2/orders', file: 'srv.go', line: 1, receiver: 'mux' },
+    ])
+  })
+
   it('skips dynamically concatenated paths (the Tyk health-check pattern)', () => {
     const file = {
       path: 'server.go',
@@ -105,6 +135,17 @@ app.post('/widgets', createWidget)`,
     const findings = discoverUndocumentedEndpoints([op('GET', '/widgets')], [file])
     expect(findings).toHaveLength(1)
     expect(findings[0]).toMatchObject({ path: ['paths', '/widgets', 'post'] })
+  })
+
+  it('names the missing method (not the path) in a method-missing finding', () => {
+    const file = {
+      path: 'app.js',
+      content: `app.get('/widgets', listWidgets)
+app.post('/widgets', createWidget)`,
+    }
+    const findings = discoverUndocumentedEndpoints([op('GET', '/widgets')], [file])
+    expect(findings[0]?.message).toMatch(/^POST \/widgets is registered/)
+    expect(findings[0]?.id).toBe('grounding-undocumented-post-/widgets')
   })
 
   it('groups multiple undocumented methods on a new path into one insertable stub', () => {

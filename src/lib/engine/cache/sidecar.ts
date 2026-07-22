@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { z } from 'zod'
 import type { StructuralSummary } from '@/lib/engine/summary'
 import type { Finding } from '@/types/domain'
 
@@ -18,6 +19,15 @@ export interface SidecarCache {
   schemaVersion: number
   specHash: string
   generatedAt: string
+  /**
+   * Whether AI (worker/post-process) analysis produced these findings. Absent on
+   * pre-upgrade sidecars — consumers must treat "absent" as `false`: such a
+   * cache still satisfies a structural-only run, but is a MISS for an AI run
+   * (it would otherwise silently serve structural-only findings).
+   */
+  aiEnabled?: boolean
+  /** Whether codebase grounding ran for this record. Absent = `false` (see `aiEnabled`). */
+  groundingEnabled?: boolean
   findings: Finding[]
   summary: StructuralSummary
   operations: Array<{ label: string; handlerHash?: string; groundingFindings?: Finding[] }>
@@ -37,6 +47,53 @@ export function sidecarPathFor(specPath: string): string {
   return join(dirname(specPath), SIDECAR_FILENAME)
 }
 
+/**
+ * Structural validation of a stored finding. Loose: fields beyond the required
+ * core (`before`/`after`/`operation`/…) ride along unvalidated — the cache must
+ * round-trip them, not re-type them. What matters is that a poisoned sidecar
+ * cannot smuggle wrong-typed values into the fields every consumer touches.
+ */
+const StoredFindingSchema = z.looseObject({
+  id: z.string(),
+  agentId: z.string(),
+  rule: z.string(),
+  severity: z.enum(['error', 'warning', 'info']),
+  confidence: z.enum(['HIGH', 'MEDIUM', 'LOW']),
+  message: z.string(),
+  autoFixable: z.boolean(),
+  autoFixed: z.boolean(),
+  resolution: z.enum(['accepted', 'rejected', 'edited', 'auto-fixed', 'pending']),
+  path: z.array(z.union([z.string(), z.number()])).optional(),
+})
+
+const SidecarCacheSchema = z.object({
+  schemaVersion: z.number(),
+  specHash: z.string(),
+  generatedAt: z.string(),
+  aiEnabled: z.boolean().optional(),
+  groundingEnabled: z.boolean().optional(),
+  findings: z.array(StoredFindingSchema),
+  summary: z.object({
+    total: z.number(),
+    errors: z.number(),
+    warnings: z.number(),
+    info: z.number(),
+  }),
+  operations: z.array(
+    z.object({
+      label: z.string(),
+      handlerHash: z.string().optional(),
+      groundingFindings: z.array(StoredFindingSchema).optional(),
+    }),
+  ),
+})
+
+/**
+ * Read and validate the sidecar. The file is committed/committable, so its
+ * content is untrusted: anything that does not match the schema — hand-edited,
+ * merge-mangled, or deliberately poisoned — is a cache miss (`null`), never a
+ * crash and never spoofed findings.
+ */
 export async function readSidecar(sidecarPath: string): Promise<SidecarCache | null> {
   let raw: string
   try {
@@ -45,9 +102,11 @@ export async function readSidecar(sidecarPath: string): Promise<SidecarCache | n
     return null
   }
   try {
-    const parsed = parseYaml(raw) as SidecarCache
-    if (!parsed || typeof parsed.specHash !== 'string') return null
-    return parsed
+    const result = SidecarCacheSchema.safeParse(parseYaml(raw))
+    if (!result.success) return null
+    // Validated structurally above; the loose finding objects carry their extra
+    // fields through, so the record is a faithful SidecarCache.
+    return result.data as unknown as SidecarCache
   } catch {
     return null
   }

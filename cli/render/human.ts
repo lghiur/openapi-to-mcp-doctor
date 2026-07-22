@@ -35,6 +35,16 @@ const GROUPS: SeverityGroup[] = [
   { severity: 'info', label: 'Info', color: ANSI.blue, icon: 'ℹ' },
 ]
 
+/**
+ * Strip C0/C1 control characters (keeping \n and \t) from untrusted spec/LLM
+ * text before it reaches the terminal — raw ESC/CSI sequences could otherwise
+ * spoof or hide output (ANSI escape injection). Applied at the render boundary
+ * only, so the tool's own coloring is unaffected.
+ */
+function sanitize(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '')
+}
+
 /** Render the human-readable scan report. ANSI color is applied only when enabled. */
 export function renderHuman(input: HumanReportInput): string {
   const paint = (text: string, code: string): string =>
@@ -72,10 +82,12 @@ export function renderHuman(input: HumanReportInput): string {
     lines.push('')
     lines.push(paint(group.label, ANSI.bold))
     for (const finding of groupFindings) {
-      const location = locationOf(finding)
+      const location = sanitize(locationOf(finding))
       const suffix = location ? `  ${paint(location, ANSI.gray)}` : ''
-      lines.push(`  ${paint(group.icon, group.color)} ${paint(finding.rule, ANSI.bold)}${suffix}`)
-      lines.push(`     ${finding.message}`)
+      lines.push(
+        `  ${paint(group.icon, group.color)} ${paint(sanitize(finding.rule), ANSI.bold)}${suffix}`,
+      )
+      lines.push(`     ${sanitize(finding.message)}`)
     }
   }
 

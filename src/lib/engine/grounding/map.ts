@@ -176,6 +176,7 @@ function findRegistration(
   requireMethod: boolean,
 ): Omit<HandlerCandidate, 'operation' | 'matched'> | null {
   const pathRe = pathPattern(candidatePath)
+  const pathReGlobal = new RegExp(pathRe.source, 'g')
   const methodRe = methodPattern(method)
 
   for (const file of routeFiles) {
@@ -188,7 +189,15 @@ function findRegistration(
       // Explicit pass: the operation's method appears near the path. Relaxed
       // pass: NO method token at all — a catch-all/default registration; a
       // registration pinned to a different method is never a match.
-      const hit = requireMethod ? methodRe.test(window) : !ANY_METHOD.test(window)
+      // The quoted path literal itself is excluded from the method search —
+      // `/options`, `/delete`, `/trace` contain method words that would
+      // otherwise defeat both passes. An embedded net/http 1.22 method prefix
+      // (`"GET /orders"`) is real method evidence and is kept.
+      const searchable = window.replace(pathReGlobal, (literal) => {
+        const embedded = /^["'`]([A-Z]+)\s/.exec(literal)
+        return embedded ? `"${embedded[1]} "` : '""'
+      })
+      const hit = requireMethod ? methodRe.test(searchable) : !ANY_METHOD.test(searchable)
       if (!hit) continue
       return {
         file: file.path,

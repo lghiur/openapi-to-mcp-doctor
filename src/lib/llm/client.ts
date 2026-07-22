@@ -85,6 +85,22 @@ async function collectStream(result: ReturnType<typeof streamText>): Promise<str
   return text
 }
 
+/**
+ * Prompt suffix asking for schema-conformant JSON. Without provider-side schema
+ * enforcement the model free-forms its JSON field names (e.g. `issue`/
+ * `suggestion` instead of `message`/`suggested`), so both the primary path and
+ * the text-mode fallback hand it the exact JSON Schema to conform to. Zod v4
+ * derives it directly; if derivation fails, fall back to a plain instruction.
+ */
+function structuredPrompt<T>(prompt: string, schema: ZodType<T>): string {
+  try {
+    const jsonSchema = JSON.stringify(z.toJSONSchema(schema))
+    return `${prompt}\n\nReturn ONLY a single JSON object that conforms to this JSON Schema. Use these exact field names and enum values. No prose, no markdown, no code fences.\n\nJSON Schema:\n${jsonSchema}`
+  } catch {
+    return `${prompt}\n\nReturn ONLY a single JSON object, with no prose or code fences.`
+  }
+}
+
 const defaultGenerateObject: GenerateObjectFn = async ({
   model,
   schema,
@@ -92,16 +108,12 @@ const defaultGenerateObject: GenerateObjectFn = async ({
   system,
   abortSignal,
 }) => {
-  // Without streamObject's provider-side schema enforcement, the model free-forms
-  // its JSON field names (e.g. `issue`/`suggestion` instead of `message`/`suggested`),
-  // so we hand it the exact JSON Schema to conform to. Zod v4 derives it directly.
-  const jsonSchema = JSON.stringify(z.toJSONSchema(schema))
   const text = await collectStream(
     streamText({
       model,
       system,
       abortSignal,
-      prompt: `${prompt}\n\nReturn ONLY a single JSON object that conforms to this JSON Schema. Use these exact field names and enum values. No prose, no markdown, no code fences.\n\nJSON Schema:\n${jsonSchema}`,
+      prompt: structuredPrompt(prompt, schema),
     }),
   )
   return { object: schema.parse(extractJsonObject(text)) }
@@ -168,7 +180,9 @@ export async function generateStructured<T>(options: GenerateStructuredOptions<T
   try {
     const { text } = await genText({
       model: options.model,
-      prompt: `${options.prompt}\n\nReturn ONLY a single JSON object, with no prose or code fences.`,
+      // Same schema-embedding prompt as the primary path — the fallback exists
+      // for gateways that reject the first attempt, not for schema-free output.
+      prompt: structuredPrompt(options.prompt, options.schema),
       system: options.system,
       abortSignal: attemptSignal(options.abortSignal, timeoutMs),
     })

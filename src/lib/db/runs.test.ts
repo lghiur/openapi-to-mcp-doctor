@@ -72,6 +72,25 @@ describe('RunStore', () => {
     expect(store.listRuns('user-1').map((r) => r.id)).toEqual(['new', 'old'])
   })
 
+  it('returns NO runs when no user id is given — never the whole table', () => {
+    store = openRunStore(':memory:')
+    store.saveRun(run('r1', '2026-06-01T00:00:00Z'), 'user-1')
+    store.saveRun(run('r2', '2026-06-02T00:00:00Z'), 'user-2')
+    // A session without an email must see zero runs, not every user's history.
+    expect(store.listRuns(undefined)).toEqual([])
+    expect(store.listRuns('')).toEqual([])
+  })
+
+  it('getRunForUser returns the run only for its owner', () => {
+    store = openRunStore(':memory:')
+    store.saveRun(run('r1', '2026-06-01T00:00:00Z'), 'owner@x.io')
+    expect(store.getRunForUser('r1', 'owner@x.io')?.id).toBe('r1')
+    // someone else's run is indistinguishable from a missing one (no id probing)
+    expect(store.getRunForUser('r1', 'attacker@x.io')).toBeNull()
+    expect(store.getRunForUser('missing', 'owner@x.io')).toBeNull()
+    expect(store.getRunForUser('r1', '')).toBeNull()
+  })
+
   it('updates a finding resolution and recomputes summary counts', () => {
     store = openRunStore(':memory:')
     store.saveRun(run('r1', '2026-06-24T00:00:00Z'), 'user-1')

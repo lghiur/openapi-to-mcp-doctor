@@ -81,6 +81,46 @@ describe('renderHuman', () => {
     expect(renderHuman(base)).not.toContain('MCP tools:')
   })
 
+  it('strips C0/C1 control characters from untrusted finding text', () => {
+    const hostile: Finding = {
+      id: 'h',
+      agentId: 'worker-1',
+      operation: 'GET /users\x1b[2K',
+      rule: 'EVIL\x1b[31mRULE',
+      severity: 'error',
+      confidence: 'HIGH',
+      message: 'hidden \x1b[8m secret \x9b1m payload \x07 bell',
+      autoFixable: false,
+      autoFixed: false,
+      resolution: 'pending',
+    }
+    const out = renderHuman({ ...base, findings: [hostile], color: false })
+    // the control bytes themselves are gone (printable residue like '[31m' is
+    // harmless once the ESC/CSI byte cannot be interpreted by the terminal)
+    expect(out).not.toContain('\x1b')
+    expect(out).not.toContain('\x9b')
+    expect(out).not.toContain('\x07')
+    expect(ANSI.test(out)).toBe(false)
+    expect(out).toContain('hidden ')
+  })
+
+  it('preserves tabs and newlines in finding messages while sanitizing', () => {
+    const tabbed: Finding = {
+      id: 't',
+      agentId: 'structural-linter',
+      operation: 'GET /users',
+      rule: 'mcp-description-too-short',
+      severity: 'warning',
+      confidence: 'HIGH',
+      message: 'col1\tcol2',
+      autoFixable: false,
+      autoFixed: false,
+      resolution: 'pending',
+    }
+    const out = renderHuman({ ...base, findings: [tabbed], color: false })
+    expect(out).toContain('col1\tcol2')
+  })
+
   it('shows a clean message when there are no findings', () => {
     const out = renderHuman({
       ...base,

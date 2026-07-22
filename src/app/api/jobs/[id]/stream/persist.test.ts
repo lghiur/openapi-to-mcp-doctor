@@ -3,6 +3,8 @@ import { createJob } from '@/lib/jobs/store'
 
 vi.mock('@/lib/auth', () => ({
   getOptionalSession: vi.fn(),
+  // Present for the route's grounding path; unused here (no LLM configured).
+  getGitHubAccessToken: vi.fn(async () => undefined),
 }))
 // One in-memory store shared by the route and the assertions below.
 vi.mock('@/lib/db', async () => {

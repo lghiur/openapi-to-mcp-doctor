@@ -2,6 +2,7 @@ import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import type { AiCapability } from '@/lib/engine'
 import type { Finding } from '@/types/domain'
 import { runScan } from './scan'
@@ -80,6 +81,69 @@ describe('runScan — sidecar cache wiring', () => {
     const { dir, specPath } = await specInTempDir()
     await runScan({ specPath })
     await expect(stat(join(dir, '.mcp-doctor.yaml'))).rejects.toThrow()
+  })
+})
+
+describe('runScan — sidecar cache AI-capability guard', () => {
+  it('treats a structural-only sidecar as a miss when AI is enabled (no stale silent serve)', async () => {
+    const { specPath } = await specInTempDir()
+    // structural-only cold run writes the sidecar
+    const structural = await runScan({ specPath, cache: true })
+    expect(structural.exitCode).toBe(0)
+
+    // same spec, now WITH AI: must recompute, not silently serve structural-only findings
+    const { ai, calls } = countingAi()
+    const withAi = await runScan({ specPath, ai, cache: true })
+    expect(calls()).toBeGreaterThan(0)
+    expect(withAi.stdout).toContain('MCP_NO_WHEN_TO_USE')
+  })
+
+  it('treats an AI sidecar as a miss for a structural-only scan (no AI findings smuggled in)', async () => {
+    const { specPath } = await specInTempDir()
+    const { ai } = countingAi()
+    await runScan({ specPath, ai, cache: true })
+
+    const structural = await runScan({ specPath, cache: true })
+    expect(structural.stderr).not.toMatch(/cache hit/)
+    expect(structural.stdout).not.toContain('MCP_NO_WHEN_TO_USE')
+  })
+
+  it('still hits for structural-only scans when a legacy sidecar has no capability meta', async () => {
+    const { dir, specPath } = await specInTempDir()
+    await runScan({ specPath, cache: true })
+    // simulate a pre-upgrade sidecar: strip the capability meta
+    const sidecarPath = join(dir, '.mcp-doctor.yaml')
+    const sidecar = parseYaml(await readFile(sidecarPath, 'utf8')) as Record<string, unknown>
+    delete sidecar.aiEnabled
+    delete sidecar.groundingEnabled
+    await writeFile(sidecarPath, stringifyYaml(sidecar))
+
+    const second = await runScan({ specPath, cache: true })
+    expect(second.stderr).toMatch(/cache hit/)
+  })
+
+  it('treats a legacy sidecar without capability meta as a miss when AI is on', async () => {
+    const { dir, specPath } = await specInTempDir()
+    await runScan({ specPath, cache: true })
+    const sidecarPath = join(dir, '.mcp-doctor.yaml')
+    const sidecar = parseYaml(await readFile(sidecarPath, 'utf8')) as Record<string, unknown>
+    delete sidecar.aiEnabled
+    delete sidecar.groundingEnabled
+    await writeFile(sidecarPath, stringifyYaml(sidecar))
+
+    const { ai, calls } = countingAi()
+    await runScan({ specPath, ai, cache: true })
+    expect(calls()).toBeGreaterThan(0)
+  })
+
+  it('AI-enabled runs keep hitting their own AI-written sidecar', async () => {
+    const { specPath } = await specInTempDir()
+    const { ai, calls } = countingAi()
+    await runScan({ specPath, ai, cache: true })
+    const coldCalls = calls()
+    const warm = await runScan({ specPath, ai, cache: true })
+    expect(calls()).toBe(coldCalls)
+    expect(warm.stderr).toMatch(/cache hit/)
   })
 })
 
@@ -258,6 +322,18 @@ func listItems(w http.ResponseWriter, r *http.Request) {
     }
     return { ai, groundedOps: () => calls }
   }
+
+  it('a structural-only sidecar does not satisfy a grounded AI run (capability miss)', async () => {
+    const { specPath, routePaths } = await groundedTempDir()
+    // structural-only run (no AI) writes a structural-only sidecar
+    await runScan({ specPath, cache: true })
+
+    const { ai, groundedOps } = groundingAi()
+    const result = await runScan({ specPath, ai, routePaths, cache: true })
+    // AI spec-quality findings are recomputed, not silently served from the stale cache
+    expect(result.stdout).toContain('MCP_NO_WHEN_TO_USE')
+    expect(groundedOps()).toHaveLength(1)
+  })
 
   it('reuses grounding when nothing changed and re-runs only the changed handler (scenarios 2 & 4)', async () => {
     const { dir, specPath, routePaths } = await groundedTempDir()

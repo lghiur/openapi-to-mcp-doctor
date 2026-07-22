@@ -119,7 +119,6 @@ function ConfigPanel({
   onClose: () => void
 }) {
   const [plan, setPlan] = useState<Plan>('lint')
-  const [routeFiles, setRouteFiles] = useState('')
   const [mismatchFix, setMismatchFix] = useState(false)
   const [branch, setBranch] = useState(repo.defaultBranch)
   const [specPath, setSpecPath] = useState('')
@@ -132,7 +131,6 @@ function ConfigPanel({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, startLoading] = useTransition()
 
-  const hasRoutes = routeFiles.trim().length > 0
   const { mode, threshold } = MODE[plan]
 
   const totalOps = paths.reduce((sum, p) => sum + p.methods.length, 0)
@@ -184,7 +182,7 @@ function ConfigPanel({
       <input type="hidden" name="repo" value={repo.fullName} />
       <input type="hidden" name="mode" value={mode} />
       <input type="hidden" name="confidenceThreshold" value={threshold} />
-      <input type="hidden" name="mismatchMode" value={hasRoutes && mismatchFix ? 'fix' : 'flag'} />
+      <input type="hidden" name="mismatchMode" value={mismatchFix ? 'fix' : 'flag'} />
       {selectionJson && <input type="hidden" name="selection" value={selectionJson} />}
 
       {/* Step 1 stays mounted (hidden) so its fields still submit with the form. */}
@@ -209,18 +207,6 @@ function ConfigPanel({
             />
           </Field>
         </div>
-
-        <Field label="Route files (optional — v2 codebase grounding)">
-          <Input
-            value={routeFiles}
-            onChange={(e) => setRouteFiles(e.target.value)}
-            placeholder="internal/api/routes/,handlers/"
-            className="font-mono"
-          />
-          <p className="mt-1 text-xs text-muted-foreground">
-            Leave blank for spec-only analysis. Go &amp; Express handler files supported.
-          </p>
-        </Field>
 
         <fieldset className="space-y-2">
           <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -256,21 +242,16 @@ function ConfigPanel({
           ))}
         </fieldset>
 
-        <label
-          className={cn(
-            'flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm',
-            !hasRoutes && 'opacity-50',
-          )}
-        >
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
           <span>
             <span className="font-medium">Auto-fix spec/code mismatches</span>
             <span className="mt-0.5 block text-xs text-muted-foreground">
-              {hasRoutes ? 'Correct the spec when it disagrees with code.' : 'Requires route files.'}
+              Correct the spec when it disagrees with code. Handler files are auto-discovered
+              from the repo (codebase grounding).
             </span>
           </span>
           <input
             type="checkbox"
-            disabled={!hasRoutes}
             checked={mismatchFix}
             onChange={(e) => setMismatchFix(e.target.checked)}
             className="size-4 accent-[var(--primary)]"

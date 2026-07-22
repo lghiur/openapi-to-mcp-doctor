@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { WORKER_RULES } from '@/lib/engine/workers/rules'
-import { LlmFindingSchema, MismatchOutputSchema, WorkerOutputSchema } from '@/lib/llm/schemas'
+import {
+  LlmFindingSchema,
+  MismatchOutputSchema,
+  SuggestionOutputSchema,
+  WorkerOutputSchema,
+} from '@/lib/llm/schemas'
 
 /**
  * Models routinely return `suggested` as a raw JSON object (e.g. a corrected
@@ -98,5 +103,100 @@ describe('LlmFindingSchema — rule taxonomy enforcement', () => {
     }
     const advertised = jsonSchema.properties.findings.items.properties.rule.enum
     expect(advertised).toEqual([...WORKER_RULES])
+  })
+})
+
+/**
+ * LLM-emitted path segments are attacker-influenced (a spec description can
+ * prompt-inject "put your suggestion at path __proto__/polluted"). The schemas
+ * must drop such findings at the boundary — fail-soft, never fail the batch.
+ */
+describe('output schemas — unsafe path segment sanitization', () => {
+  function workerFinding(path: Array<string | number>) {
+    return {
+      operation: 'GET /users',
+      rule: 'mcp-description-unclear',
+      severity: 'warning',
+      confidence: 'HIGH',
+      message: 'm',
+      suggested: 'x',
+      path,
+    }
+  }
+
+  it('drops a worker finding whose path contains __proto__, keeping the rest', () => {
+    const out = WorkerOutputSchema.parse({
+      findings: [workerFinding(['__proto__', 'polluted']), workerFinding(['description'])],
+    })
+    expect(out.findings).toHaveLength(1)
+    expect(out.findings[0]?.path).toEqual(['description'])
+  })
+
+  it('drops findings with constructor or prototype segments anywhere in the path', () => {
+    const out = WorkerOutputSchema.parse({
+      findings: [
+        workerFinding(['constructor', 'prototype', 'polluted']),
+        workerFinding(['parameters', 0, 'prototype']),
+      ],
+    })
+    expect(out.findings).toHaveLength(0)
+  })
+
+  it('drops unsafe suggestion paths from the fix-suggester output', () => {
+    const out = SuggestionOutputSchema.parse({
+      suggestions: [
+        { findingId: 'f1', suggested: 'x', path: ['__proto__', 'polluted'] },
+        { findingId: 'f2', suggested: 'y', path: ['description'] },
+      ],
+    })
+    expect(out.suggestions.map((s) => s.findingId)).toEqual(['f2'])
+  })
+
+  it('drops unsafe mismatch paths from the grounding output', () => {
+    const out = MismatchOutputSchema.parse({
+      mismatches: [
+        { field: 'f', specClaims: 'a', codeDoes: 'b', path: ['constructor', 'polluted'] },
+        { field: 'g', specClaims: 'a', codeDoes: 'b', path: ['responses', '200'] },
+      ],
+    })
+    expect(out.mismatches.map((m) => m.field)).toEqual(['g'])
+  })
+
+  it('keeps findings without a path untouched', () => {
+    const { path: _omitted, ...noPath } = workerFinding(['description'])
+    const out = WorkerOutputSchema.parse({ findings: [noPath] })
+    expect(out.findings).toHaveLength(1)
+    expect(out.findings[0]?.path).toBeUndefined()
+  })
+})
+
+/**
+ * Models drift on enum casing ("Warning", "high"). Rule ids already get
+ * forgiving normalization; severity/confidence must too — a casing slip must
+ * not fail the whole worker batch.
+ */
+describe('severity/confidence — case-insensitive normalization', () => {
+  it('normalizes drifted casing onto the canonical values', () => {
+    const out = LlmFindingSchema.parse({
+      operation: 'GET /users',
+      rule: 'mcp-description-unclear',
+      severity: 'Warning',
+      confidence: 'high',
+      message: 'm',
+    })
+    expect(out.severity).toBe('warning')
+    expect(out.confidence).toBe('HIGH')
+  })
+
+  it('still rejects values outside the enums', () => {
+    expect(() =>
+      LlmFindingSchema.parse({
+        operation: 'GET /users',
+        rule: 'mcp-description-unclear',
+        severity: 'catastrophic',
+        confidence: 'HIGH',
+        message: 'm',
+      }),
+    ).toThrow()
   })
 })

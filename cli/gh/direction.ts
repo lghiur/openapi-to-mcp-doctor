@@ -12,12 +12,32 @@ function normalize(path: string): string {
 /** Classify what a PR touched into the scan strategy to run. */
 export function detectDirection(params: {
   changedFiles: string[]
-  specPath: string
+  /** Repo-relative path of the scanned spec, when known at direction time. */
+  specPath?: string
+  /** Old path of the spec when this PR renamed it (`git diff --name-status` R entry). */
+  specRenamedFrom?: string
 }): DirectionResult {
-  const spec = normalize(params.specPath)
   const changedFiles = params.changedFiles.map(normalize)
 
-  const specChanged = changedFiles.some((f) => f === spec || SPEC_FILE_PATTERN.test(f))
+  // When the spec path is known (always the case in cli/action.ts — the spec
+  // is resolved or auto-detected before direction runs), only THAT file (or
+  // its pre-rename path) counts as a spec change: an unrelated
+  // openapi/swagger-named file elsewhere in the repo must not flip the PR
+  // into spec-verify for a spec it never touched. The generic filename
+  // pattern survives only for callers that genuinely do not know the spec
+  // path at direction time.
+  const specTargets =
+    params.specPath !== undefined
+      ? new Set(
+          [params.specPath, params.specRenamedFrom]
+            .filter((p): p is string => p !== undefined)
+            .map(normalize),
+        )
+      : undefined
+  const specChanged =
+    specTargets !== undefined
+      ? changedFiles.some((f) => specTargets.has(f))
+      : changedFiles.some((f) => SPEC_FILE_PATTERN.test(f))
   const routesChanged = changedFiles.some((f) => SOURCE_PATTERN.test(f) && !SOURCE_EXCLUDE.test(f))
 
   const strategy = specChanged

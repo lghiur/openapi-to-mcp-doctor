@@ -143,6 +143,66 @@ describe('orchestrate', () => {
     expect(healthy && 'error' in healthy ? healthy.error : undefined).toBeUndefined()
   })
 
+  it('caps in-flight workers at 4 by default', async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+    const runWorker = async (batch: OperationRef[], ctx: { agentId: string }) => {
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return batch.map((o) => finding(ctx.agentId, o.label))
+    }
+    const events = await collect(
+      orchestrate({ operations: makeOps(12), version: '3.0', batchSize: 1, runWorker }),
+    )
+    expect(maxInFlight).toBe(4)
+    // Every worker still runs to completion and streams its findings.
+    expect(events.filter((e) => e.type === 'agent_completed')).toHaveLength(12)
+    expect(events.filter((e) => e.type === 'finding')).toHaveLength(12)
+  })
+
+  it('honors a concurrency override', async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+    const runWorker = async () => {
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((r) => setTimeout(r, 2))
+      inFlight--
+      return []
+    }
+    await collect(
+      orchestrate({
+        operations: makeOps(6),
+        version: '3.0',
+        batchSize: 1,
+        concurrency: 2,
+        runWorker,
+      }),
+    )
+    expect(maxInFlight).toBe(2)
+  })
+
+  it('releases a failed worker’s slot so queued workers still run', async () => {
+    const started: string[] = []
+    const runWorker = async (_batch: OperationRef[], ctx: { agentId: string }) => {
+      started.push(ctx.agentId)
+      throw new Error('llm exploded')
+    }
+    const events = await collect(
+      orchestrate({
+        operations: makeOps(5),
+        version: '3.0',
+        batchSize: 1,
+        concurrency: 1,
+        runWorker,
+      }),
+    )
+    expect(started).toHaveLength(5)
+    expect(events.filter((e) => e.type === 'agent_completed')).toHaveLength(5)
+  })
+
   it('yields nothing but a clean stream when there are no operations', async () => {
     const runWorker = vi.fn(async () => [])
     const events = await collect(orchestrate({ operations: [], version: '3.0', runWorker }))

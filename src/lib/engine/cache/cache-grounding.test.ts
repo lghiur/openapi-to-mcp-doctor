@@ -254,4 +254,18 @@ func listItems(w http.ResponseWriter, r *http.Request) {}
     const after = hashOperationHandlers(operations, changed)
     expect(after['GET /items']).not.toBe(before['GET /items'])
   })
+
+  it("changes the hash when the operation's spec fragment changes (spec edits invalidate grounding too)", () => {
+    const before = hashOperationHandlers(extractOperations(SPEC), ROUTES)
+    const specChanged = SPEC.replace(
+      'operationId: list_items',
+      'operationId: list_items\n      description: Now returns 204 No Content.',
+    )
+    const after = hashOperationHandlers(extractOperations(specChanged), ROUTES)
+    // The edited operation's grounding key changes — a cached spec⇄code mismatch
+    // finding about the old description must not be replayed.
+    expect(after['GET /items']).not.toBe(before['GET /items'])
+    // Untouched operations keep their key and reuse their grounding.
+    expect(after['GET /users']).toBe(before['GET /users'])
+  })
 })

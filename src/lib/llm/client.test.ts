@@ -104,6 +104,15 @@ describe('generateStructured', () => {
     expect(out.findings[0]?.rule).toBe('x')
   })
 
+  it('embeds the JSON schema in the text-mode fallback prompt, like the primary path', async () => {
+    const generateObject = vi.fn().mockRejectedValue(new Error('no object generated'))
+    const generateText = vi.fn().mockResolvedValue({ text: '{"findings":[{"rule":"x"}]}' })
+    await generateStructured({ schema, prompt: 'p', model: fakeModel, generateObject, generateText })
+    const args = generateText.mock.calls[0]?.[0] as { prompt: string }
+    expect(args.prompt).toContain('JSON Schema')
+    expect(args.prompt).toContain('"findings"')
+  })
+
   it('throws LlmGenerationError when both paths fail', async () => {
     const generateObject = vi.fn().mockRejectedValue(new Error('bad'))
     const generateText = vi.fn().mockResolvedValue({ text: 'not json at all' })

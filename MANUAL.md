@@ -163,6 +163,15 @@ Errors
 | `--output <path>`                            | Where to write the patched spec in fix mode                                  |
 | `--route-paths <a,b,c>`                      | **v2**: comma-separated handler files for codebase grounding (needs LLM)     |
 | `--mismatch-mode <flag\|fix>`                | **v2**: how to treat spec/code mismatches (default `flag`)                   |
+| `--no-cache`                                 | Skip the `.mcp-doctor.yaml` sidecar cache next to the spec                   |
+| `--no-history`                               | Do not record this run under `.mcp-doctor/runs`                              |
+
+Enum-valued flags (`--mode`, `--confidence-threshold`, `--mismatch-mode`) are
+validated: an unknown value exits `3` with an error instead of being silently
+coerced to a default. `--json` and `--report` also work in fix mode — they emit
+the post-fix report (applied fixes appear as `autoFixed: true` findings, and
+`summary.autoFixed` counts them); the human fix summary moves to stderr under
+`--json`.
 
 **Examples**
 
@@ -194,11 +203,16 @@ stderr. Without them, it prints a hint and runs structural-only.
 | `0`  | No ERROR-severity findings (warnings allowed), or fix mode applied successfully       |
 | `1`  | One or more ERROR-severity findings                                                   |
 | `2`  | Analysis failed (spec unreadable, unsupported/undetectable version, e.g. Swagger 2.0) |
-| `3`  | Invalid arguments                                                                     |
+| `3`  | Invalid arguments or configuration (incl. unknown flag values and unwritable `--report`/`--output` paths) |
+
+On exit `2` the failure reason is printed to stdout (stable machine contract);
+under `--json` it is additionally mirrored to stderr so pipelines parsing
+stdout still surface the error.
 
 ### 2.2 `history` — past runs
 
-Runs are recorded under `.mcp-doctor/runs/` in the current directory.
+Every lint scan is recorded under `.mcp-doctor/runs/` in the current directory
+by default (last 100 runs kept; opt out with `scan --no-history`).
 
 ```bash
 npm run cli -- history                 # list recent runs
@@ -209,7 +223,7 @@ npm run cli -- history <run-id> --json # machine-readable
 ### 2.3 `diff` — compare runs
 
 ```bash
-npm run cli -- diff <run-id>           # compares a run to the previous one
+npm run cli -- diff <run-id>           # compares a run to the previous run of the same spec
 ```
 
 ---
