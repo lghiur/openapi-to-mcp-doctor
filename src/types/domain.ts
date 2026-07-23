@@ -219,6 +219,12 @@ export type SSEEvent =
       info: number
       durationMs: number
     }
+  /**
+   * A caveat about this run that the user must see — e.g. GitHub truncated the
+   * repository tree, so code grounding only saw part of the codebase. Emitted
+   * by the stream route, never by the engine, so it has no `EngineEvent` twin.
+   */
+  | { type: 'notice'; level: 'warning'; message: string }
 
 /**
  * Internal streaming event used by the engine (orchestrator, runAnalysis). Unlike

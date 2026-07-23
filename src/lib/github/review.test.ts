@@ -66,6 +66,11 @@ function makeFake(options: {
 
 const PARAMS_BASE = { owner: 'tyk', repo: 'gateway', prNumber: 42, commitSha: 'abc123' }
 
+/** An Octokit-shaped API error (plain Error carrying `status`). */
+function apiError(status: number, message: string): Error {
+  return Object.assign(new Error(message), { status })
+}
+
 const BOT = { login: 'github-actions[bot]' }
 
 const wanted: ReviewCommentInput[] = [
@@ -308,6 +313,53 @@ describe('syncPrReview', () => {
     expect(calls.individual[0]?.path).toBe('swagger.yml')
     expect(calls.individual[0]?.line).toBe(10)
     expect(calls.individual[0]?.body.startsWith(reviewMarkerFor('k-opid'))).toBe(true)
+  })
+
+  it('does not retry individually when the batch review is rejected for permissions', async () => {
+    const { api, calls } = makeFake({
+      createReviewError: apiError(403, 'Resource not accessible by integration'),
+    })
+
+    const result = await syncPrReview(api, { ...PARAMS_BASE, comments: wanted })
+
+    // No hammering: zero individual calls, every comment reported as unposted.
+    expect(calls.individual).toHaveLength(0)
+    expect(result.posted).toBe(0)
+    expect(result.skipped).toHaveLength(2)
+    expect(result.failure).toEqual({
+      status: 403,
+      message: 'Resource not accessible by integration',
+    })
+  })
+
+  it('stops the individual fallback at the first rate-limit trip', async () => {
+    const { api, calls } = makeFake({
+      createReviewError: new Error('422: line not in diff'),
+      individualErrors: new Map([['swagger.yml:10', apiError(429, 'API rate limit exceeded')]]),
+    })
+
+    const result = await syncPrReview(api, { ...PARAMS_BASE, comments: wanted })
+
+    expect(calls.individual).toHaveLength(0)
+    expect(result.posted).toBe(0)
+    expect(result.failure?.status).toBe(429)
+    // The comment that tripped the limit and the untried remainder are both reported.
+    expect(result.skipped).toEqual([
+      { path: 'swagger.yml', line: 10 },
+      { path: 'swagger.yml', line: 25 },
+    ])
+  })
+
+  it('reports no failure when only line anchoring fails', async () => {
+    const { api } = makeFake({
+      createReviewError: new Error('422: line not in diff'),
+      individualErrors: new Map([['swagger.yml:25', new Error('422: line not in diff')]]),
+    })
+
+    const result = await syncPrReview(api, { ...PARAMS_BASE, comments: wanted })
+
+    expect(result.failure).toBeUndefined()
+    expect(result.posted).toBe(1)
   })
 
   it('matches existing comments via original_line when line is null (outdated position)', async () => {

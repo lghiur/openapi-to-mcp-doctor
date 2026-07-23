@@ -28,6 +28,14 @@ export interface SidecarCache {
   aiEnabled?: boolean
   /** Whether codebase grounding ran for this record. Absent = `false` (see `aiEnabled`). */
   groundingEnabled?: boolean
+  /**
+   * Marks a record whose findings cover only a selected subset of operations.
+   * Such a record must never be persisted (its partial findings would be reused
+   * as complete by a later full run), so the module refuses to write it and
+   * treats any it reads — hand-planted or merge-mangled — as a miss. It exists
+   * as a field only to make that refusal explicit and testable.
+   */
+  scoped?: boolean
   findings: Finding[]
   summary: StructuralSummary
   operations: Array<{ label: string; handlerHash?: string; groundingFindings?: Finding[] }>
@@ -72,6 +80,7 @@ const SidecarCacheSchema = z.object({
   generatedAt: z.string(),
   aiEnabled: z.boolean().optional(),
   groundingEnabled: z.boolean().optional(),
+  scoped: z.boolean().optional(),
   findings: z.array(StoredFindingSchema),
   summary: z.object({
     total: z.number(),
@@ -104,6 +113,9 @@ export async function readSidecar(sidecarPath: string): Promise<SidecarCache | n
   try {
     const result = SidecarCacheSchema.safeParse(parseYaml(raw))
     if (!result.success) return null
+    // A persisted scoped record is illegitimate (writeSidecar refuses to create
+    // one); if one exists it was planted out-of-band — treat it as a miss.
+    if (result.data.scoped === true) return null
     // Validated structurally above; the loose finding objects carry their extra
     // fields through, so the record is a faithful SidecarCache.
     return result.data as unknown as SidecarCache
@@ -113,6 +125,12 @@ export async function readSidecar(sidecarPath: string): Promise<SidecarCache | n
 }
 
 export async function writeSidecar(sidecarPath: string, cache: SidecarCache): Promise<void> {
+  // Persisting a scoped (subset) record would let a later full run reuse its
+  // partial findings as complete. Refuse at the one choke point every write
+  // passes through, rather than trusting each caller.
+  if (cache.scoped === true) {
+    throw new Error('refusing to persist a scoped sidecar record (partial findings)')
+  }
   await writeFile(sidecarPath, stringifyYaml(cache))
 }
 
@@ -125,6 +143,12 @@ export async function withSpecCache(options: {
   specHash: string
   generatedAt?: string
   compute: () => Promise<CachedComputation>
+  /**
+   * The computation covers only a selected subset of operations. A scoped run
+   * still reads a fresh full-spec cache, but its own partial result is never
+   * persisted — writing it would poison a later full run.
+   */
+  scoped?: boolean
 }): Promise<{ findings: Finding[]; summary: StructuralSummary; fromCache: boolean }> {
   const existing = await readSidecar(options.sidecarPath)
   if (existing && existing.specHash === options.specHash) {
@@ -132,15 +156,16 @@ export async function withSpecCache(options: {
   }
 
   const computed = await options.compute()
-  const cache: SidecarCache = {
-    schemaVersion: SCHEMA_VERSION,
-    specHash: options.specHash,
-    generatedAt: options.generatedAt ?? new Date().toISOString(),
-    findings: computed.findings,
-    summary: computed.summary,
-    operations: computed.operations.map((label) => ({ label })),
+  if (!options.scoped) {
+    await writeSidecar(options.sidecarPath, {
+      schemaVersion: SCHEMA_VERSION,
+      specHash: options.specHash,
+      generatedAt: options.generatedAt ?? new Date().toISOString(),
+      findings: computed.findings,
+      summary: computed.summary,
+      operations: computed.operations.map((label) => ({ label })),
+    })
   }
-  await writeSidecar(options.sidecarPath, cache)
   return { findings: computed.findings, summary: computed.summary, fromCache: false }
 }
 

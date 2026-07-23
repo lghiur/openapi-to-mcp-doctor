@@ -128,10 +128,11 @@ export async function* runAnalysis(
     // structural findings already streamed out, then re-emits them enriched
     // (same ids) so clients upgrade their diagnostics to acceptable suggestions.
     const runSuggest = options.ai.runSuggest
+    const suggesting = runSuggest !== undefined && structuralFindings.length > 0
     const suggestStartedAt = now()
     let suggestError: string | undefined
     const suggestPromise: Promise<Finding[]> =
-      runSuggest && structuralFindings.length > 0
+      suggesting && runSuggest
         ? runSuggest(structuralFindings, operations, structural.version).catch(
             (cause: unknown) => {
               suggestError = cause instanceof Error ? cause.message : 'Fix suggestion failed.'
@@ -139,7 +140,7 @@ export async function* runAnalysis(
             },
           )
         : Promise.resolve([])
-    if (runSuggest && structuralFindings.length > 0) {
+    if (suggesting) {
       yield { type: 'agent_started', agentId: 'fix-suggester', operations: [] }
     }
 
@@ -155,7 +156,11 @@ export async function* runAnalysis(
       runWorker: options.ai.runWorker,
       // Linter-detected gaps that need authored content (missing descriptions,
       // response schemas…) — the workers propose the content, closing the loop.
-      gaps: structuralGapsFor(operations, structuralFindings),
+      // Only when no fix-suggester is running: both select the SAME findings
+      // (`contentGaps`), so feeding both bills two LLM passes per gap and yields
+      // two differently-worded fixes for it. The suggester wins when present —
+      // it enriches the original finding rather than emitting a second one.
+      ...(suggesting ? {} : { gaps: structuralGapsFor(operations, structuralFindings) }),
       now,
     })) {
       if (event.type === 'finding') findings.push(event.finding)
@@ -187,7 +192,7 @@ export async function* runAnalysis(
       })
     }
 
-    if (runSuggest && structuralFindings.length > 0) {
+    if (suggesting) {
       const enriched = await suggestPromise
       for (const finding of enriched) {
         const index = findings.findIndex((f) => f.id === finding.id)

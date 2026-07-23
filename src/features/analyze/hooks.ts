@@ -12,6 +12,7 @@ const EVENT_TYPES = [
   'file_read',
   'postprocess_started',
   'analysis_complete',
+  'notice',
 ] as const
 
 /** If no event arrives for this long while streaming, flag the run as stalled. */

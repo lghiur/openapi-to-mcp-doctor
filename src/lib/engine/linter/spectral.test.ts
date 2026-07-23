@@ -219,4 +219,51 @@ describe('sanitizeNulls', () => {
     expect(sanitizeNulls(false)).toBe(false)
     expect(sanitizeNulls('keep')).toBe('keep')
   })
+
+  it('cuts self-referential cycles instead of recursing forever', () => {
+    const node: Record<string, unknown> = { type: 'object' }
+    node.child = node
+    expect(sanitizeNulls(node)).toEqual({ type: 'object', child: '' })
+  })
+
+  it('cuts cycles that run through an array', () => {
+    const node: Record<string, unknown> = { type: 'object' }
+    node.anyOf = [node]
+    expect(sanitizeNulls(node)).toEqual({ type: 'object', anyOf: [''] })
+  })
+
+  it('duplicates shared (non-cyclic) nodes rather than treating them as cycles', () => {
+    const shared = { description: 'shared' }
+    expect(sanitizeNulls({ a: shared, b: shared })).toEqual({
+      a: { description: 'shared' },
+      b: { description: 'shared' },
+    })
+  })
+
+  it('keeps a literal `__proto__` key as an own property instead of losing it', () => {
+    const sanitized = sanitizeNulls(JSON.parse('{"__proto__":{"enum":["a"]},"type":"object"}'))
+    expect(Object.getPrototypeOf(sanitized)).toBe(Object.prototype)
+    expect(Object.keys(sanitized as object)).toEqual(['__proto__', 'type'])
+    expect('enum' in (sanitized as object)).toBe(false)
+  })
+})
+
+describe('runStructuralLint — hostile document shapes', () => {
+  it('completes on a spec whose YAML anchors form a cycle (never throws)', async () => {
+    const cyclic = `openapi: 3.0.3
+info:
+  title: T
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Node: &node
+      type: object
+      properties:
+        child: *node
+`
+    const result = await runStructuralLint(cyclic, mcpRuleset('3.0'))
+    expect(result.halted).toBe(false)
+    expect(Array.isArray(result.findings)).toBe(true)
+  }, 10000)
 })

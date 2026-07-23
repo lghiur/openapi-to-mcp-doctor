@@ -1,4 +1,4 @@
-import { parse as parseYaml } from 'yaml'
+import { isScalar, parseDocument, parse as parseYaml } from 'yaml'
 import type { OpenApiVersion, VersionDetectionError } from '@/types/domain'
 
 /**
@@ -47,7 +47,7 @@ export function detectVersion(spec: string): VersionDetectionResult {
     return undetectable('No `openapi` version field was found.')
   }
 
-  const rawVersion = String(raw)
+  const rawVersion = typeof raw === 'number' ? numericVersionSource(spec, raw) : String(raw)
   const match = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(rawVersion)
   if (!match) {
     return undetectable(`The \`openapi\` value "${rawVersion}" is not a recognized version.`)
@@ -60,6 +60,25 @@ export function detectVersion(spec: string): VersionDetectionResult {
   return undetectable(
     `OpenAPI ${rawVersion} is not supported. This tool supports OpenAPI 3.0 and 3.1.`,
   )
+}
+
+/**
+ * Recover the version as it was WRITTEN when YAML resolved it to a number.
+ *
+ * `openapi: 3.0` (unquoted — a common authoring slip) is a YAML float, and
+ * `String(3.0)` is `"3"`: the minor version is gone and the spec would halt as
+ * undetectable, while `openapi: 3.1` survives by accident. Re-reading the scalar's
+ * source text restores the literal. Falls back to the numeric form if the scalar
+ * can't be located, so a bare `openapi: 3` still fails detection as it should.
+ */
+function numericVersionSource(spec: string, value: number): string {
+  try {
+    const node = parseDocument(spec).get('openapi', true)
+    if (isScalar(node) && typeof node.source === 'string') return node.source
+  } catch {
+    // fall through to the numeric form
+  }
+  return String(value)
 }
 
 function undetectable(message: string): {

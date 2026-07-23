@@ -9,7 +9,25 @@
  * no annotation. Only an unparseable or empty document yields undefined.
  */
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
-import type { Pair, ParsedNode } from 'yaml'
+import type { Document, Pair, ParsedNode } from 'yaml'
+
+/**
+ * Last parsed spec, memoized. Callers resolve every finding of a run against the
+ * SAME spec text — dozens to hundreds of calls — so parsing per call made the
+ * cost of locating findings scale with (findings × spec size) on multi-MB specs.
+ *
+ * One entry is enough: the call sites loop over one spec at a time, and the
+ * `===` guard is an identity check for the reference they pass each time. The
+ * document is read-only here, so sharing it across calls is safe.
+ */
+let memo: { text: string; doc: Document.Parsed } | null = null
+
+function parseMemoized(specText: string): Document.Parsed {
+  if (memo !== null && memo.text === specText) return memo.doc
+  const doc = parseDocument(specText)
+  memo = { text: specText, doc }
+  return doc
+}
 
 /** Converts a 0-based character offset into a 1-based line number. */
 function offsetToLine(text: string, offset: number): number {
@@ -25,7 +43,7 @@ export function resolveSpecLine(
   specText: string,
   path: ReadonlyArray<string | number>,
 ): number | undefined {
-  const doc = parseDocument(specText)
+  const doc = parseMemoized(specText)
   if (doc.errors.length > 0) return undefined
 
   let node: ParsedNode | null = doc.contents

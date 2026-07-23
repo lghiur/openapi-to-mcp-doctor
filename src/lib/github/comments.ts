@@ -10,20 +10,28 @@
 export const STICKY_COMMENT_MARKER = '<!-- mcp-doctor:sticky -->'
 export const REVIEW_COMMENT_MARKER = '<!-- mcp-doctor:review -->'
 
-/** Author our comments are posted as when the workflow token is used. */
-export const DEFAULT_BOT_LOGIN = 'github-actions[bot]'
-
 /**
- * Ownership guard: a marker alone can be spoofed by any commenter, so a
- * comment is only "ours" when its author is a bot or the expected login.
- * A missing user (structural fakes / redacted API responses) is accepted.
+ * Ownership guard: a marker alone can be spoofed by any commenter, so a comment
+ * is only "ours" — editable and deletable — when its author says so too.
+ *
+ * - No author at all (ghost user, redacted response) is NOT trusted: we would
+ *   be editing a comment we cannot attribute to ourselves.
+ * - With `expectedAuthor` configured (the Action's `bot-login` input), only an
+ *   exact login match counts.
+ * - Without one, the generic `[bot]` allowance stands, because the posting
+ *   identity depends on which token the workflow used and we cannot know it.
+ *
+ * Residual risk of that last case: another GitHub App on the same repo whose
+ * comment happens to start with our marker would be treated as ours. Setting
+ * `bot-login` closes it; it is the recommended configuration.
  */
 export function isTrustedCommentAuthor(
   user: { login: string } | null | undefined,
-  expectedAuthor: string,
+  expectedAuthor: string | undefined,
 ): boolean {
-  if (user == null) return true
-  return user.login === expectedAuthor || user.login.endsWith('[bot]')
+  if (user == null) return false
+  if (expectedAuthor !== undefined) return user.login === expectedAuthor
+  return user.login.endsWith('[bot]')
 }
 
 const PER_PAGE = 100
@@ -61,7 +69,10 @@ export interface UpsertStickyCommentParams {
   issueNumber: number
   /** Full comment body; must start with STICKY_COMMENT_MARKER. */
   body: string
-  /** Login owning our comments (besides any `[bot]`). Default github-actions[bot]. */
+  /**
+   * Login owning our comments. When unset, any `[bot]` author is accepted —
+   * see `isTrustedCommentAuthor` for the residual risk that allowance carries.
+   */
   expectedAuthor?: string
 }
 
@@ -73,8 +84,7 @@ export async function upsertStickyComment(
   api: IssueCommentApi,
   params: UpsertStickyCommentParams,
 ): Promise<{ id: number; created: boolean }> {
-  const { owner, repo, issueNumber, body } = params
-  const expectedAuthor = params.expectedAuthor ?? DEFAULT_BOT_LOGIN
+  const { owner, repo, issueNumber, body, expectedAuthor } = params
 
   if (!body.startsWith(STICKY_COMMENT_MARKER)) {
     throw new Error(`sticky comment body must start with the marker ${STICKY_COMMENT_MARKER}`)

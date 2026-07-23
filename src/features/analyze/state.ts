@@ -35,6 +35,8 @@ export interface AnalysisState {
   plannedPhases: AnalysisPhase[]
   /** Per-phase lifecycle, keyed by phase; only planned phases are present. */
   phaseStatus: Partial<Record<AnalysisPhase, PhaseStatus>>
+  /** Run caveats the user must see (e.g. only part of the codebase was read). */
+  notices: string[]
   totals?: { total: number; errors: number; warnings: number; info: number; durationMs: number }
 }
 
@@ -46,6 +48,7 @@ export const initialAnalysisState: AnalysisState = {
   operations: [],
   plannedPhases: [],
   phaseStatus: {},
+  notices: [],
 }
 
 /** Set one phase's status, returning a new phaseStatus map (no-op if not planned). */
@@ -152,6 +155,11 @@ export function analysisReducer(state: AnalysisState, event: AnalysisAction): An
       }
       return { ...state, findings: [...state.findings, finding satisfies SSEFinding] }
     }
+    case 'notice':
+      // De-duplicated: a replayed or repeated caveat must not stack up.
+      return state.notices.includes(event.message)
+        ? state
+        : { ...state, notices: [...state.notices, event.message] }
     case 'analysis_complete':
       return {
         ...state,

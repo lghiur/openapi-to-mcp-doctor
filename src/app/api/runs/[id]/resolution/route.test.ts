@@ -14,6 +14,21 @@ import { getOptionalSession } from '@/lib/auth'
 import { getRunStore } from '@/lib/db'
 import { POST } from './route'
 
+function finding(id: string): AnalysisRun['findings'][number] {
+  return {
+    id,
+    agentId: 'worker-1',
+    operation: 'GET /users',
+    rule: 'MCP_NO_WHEN_TO_USE',
+    severity: 'warning',
+    confidence: 'MEDIUM',
+    before: '',
+    after: 'Better description.',
+    resolution: 'pending',
+    autoFixed: false,
+  }
+}
+
 function sampleRun(id: string): AnalysisRun {
   return {
     id,
@@ -34,20 +49,7 @@ function sampleRun(id: string): AnalysisRun {
       autoFixed: 0,
     },
     agents: [],
-    findings: [
-      {
-        id: 'find-1',
-        agentId: 'worker-1',
-        operation: 'GET /users',
-        rule: 'MCP_NO_WHEN_TO_USE',
-        severity: 'warning',
-        confidence: 'MEDIUM',
-        before: '',
-        after: 'Better description.',
-        resolution: 'pending',
-        autoFixed: false,
-      },
-    ],
+    findings: [finding('find-1')],
   }
 }
 
@@ -133,5 +135,91 @@ describe('POST /api/runs/[id]/resolution', () => {
     const run = getRunStore().getRun('run-1')
     expect(run?.findings[0]?.resolution).toBe('accepted')
     expect(run?.summary.accepted).toBe(1)
+  })
+})
+
+describe('POST /api/runs/[id]/resolution — bulk updates', () => {
+  it('applies every update in one request and recomputes counts once', async () => {
+    signIn('dev@tyk.io')
+    const run = sampleRun('run-bulk')
+    run.findings = [finding('f1'), finding('f2'), finding('f3')]
+    getRunStore().saveRun(run, 'dev@tyk.io')
+
+    const res = await POST(
+      resolutionRequest({
+        updates: [
+          { findingId: 'f1', resolution: 'accepted' },
+          { findingId: 'f2', resolution: 'rejected' },
+          { findingId: 'f3', resolution: 'edited' },
+        ],
+      }),
+      context('run-bulk'),
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, updated: 3 })
+    const saved = getRunStore().getRun('run-bulk')
+    expect(saved?.findings.map((f) => f.resolution)).toEqual(['accepted', 'rejected', 'edited'])
+    // 'edited' counts as accepted, so 2 accepted / 1 rejected.
+    expect(saved?.summary.accepted).toBe(2)
+    expect(saved?.summary.rejected).toBe(1)
+  })
+
+  it('leaves findings absent from the batch untouched', async () => {
+    signIn('dev@tyk.io')
+    const run = sampleRun('run-partial')
+    run.findings = [finding('f1'), finding('f2')]
+    getRunStore().saveRun(run, 'dev@tyk.io')
+
+    await POST(
+      resolutionRequest({ updates: [{ findingId: 'f2', resolution: 'accepted' }] }),
+      context('run-partial'),
+    )
+
+    const saved = getRunStore().getRun('run-partial')
+    expect(saved?.findings.map((f) => f.resolution)).toEqual(['pending', 'accepted'])
+  })
+
+  it('rejects an empty or malformed batch', async () => {
+    signIn('dev@tyk.io')
+    getRunStore().saveRun(sampleRun('run-empty'), 'dev@tyk.io')
+    const empty = await POST(resolutionRequest({ updates: [] }), context('run-empty'))
+    expect(empty.status).toBe(400)
+    const malformed = await POST(
+      resolutionRequest({ updates: [{ findingId: 'f1', resolution: 'maybe' }] }),
+      context('run-empty'),
+    )
+    expect(malformed.status).toBe(400)
+  })
+
+  it("404s a bulk update against another user's run (ownership check preserved)", async () => {
+    signIn('attacker@tyk.io')
+    getRunStore().saveRun(sampleRun('run-bulk-owned'), 'owner@tyk.io')
+    const res = await POST(
+      resolutionRequest({ updates: [{ findingId: 'find-1', resolution: 'accepted' }] }),
+      context('run-bulk-owned'),
+    )
+    expect(res.status).toBe(404)
+    expect(getRunStore().getRun('run-bulk-owned')?.findings[0]?.resolution).toBe('pending')
+  })
+
+  it('404s a bulk update for a session without an email', async () => {
+    signIn()
+    getRunStore().saveRun(sampleRun('run-bulk-noemail'), 'owner@tyk.io')
+    const res = await POST(
+      resolutionRequest({ updates: [{ findingId: 'find-1', resolution: 'accepted' }] }),
+      context('run-bulk-noemail'),
+    )
+    expect(res.status).toBe(404)
+    expect(getRunStore().getRun('run-bulk-noemail')?.findings[0]?.resolution).toBe('pending')
+  })
+
+  it('requires authentication for bulk updates too', async () => {
+    vi.mocked(getOptionalSession).mockResolvedValue(null)
+    const res = await POST(
+      resolutionRequest({ updates: [{ findingId: 'find-1', resolution: 'accepted' }] }),
+      context('run-1'),
+    )
+    expect(res.status).toBe(401)
   })
 })

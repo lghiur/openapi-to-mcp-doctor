@@ -50,6 +50,8 @@ function makeFakeApi(initial: FakeComment[]) {
 
 const params = { owner: 'tyk', repo: 'demo', issueNumber: 7 }
 
+const BOT = { login: 'github-actions[bot]' }
+
 describe('marker constants', () => {
   it('match the shared literal values', () => {
     expect(STICKY_COMMENT_MARKER).toBe('<!-- mcp-doctor:sticky -->')
@@ -58,18 +60,32 @@ describe('marker constants', () => {
 })
 
 describe('isTrustedCommentAuthor', () => {
-  it('accepts any [bot] login, the expected author, and a missing user', () => {
+  it('accepts the expected author exactly when one is configured', () => {
+    expect(isTrustedCommentAuthor({ login: 'my-ci-user' }, 'my-ci-user')).toBe(true)
     expect(isTrustedCommentAuthor({ login: 'github-actions[bot]' }, 'github-actions[bot]')).toBe(
       true,
     )
-    expect(isTrustedCommentAuthor({ login: 'my-app[bot]' }, 'github-actions[bot]')).toBe(true)
-    expect(isTrustedCommentAuthor({ login: 'my-ci-user' }, 'my-ci-user')).toBe(true)
-    expect(isTrustedCommentAuthor(undefined, 'github-actions[bot]')).toBe(true)
-    expect(isTrustedCommentAuthor(null, 'github-actions[bot]')).toBe(true)
+  })
+
+  it('rejects a foreign [bot] app when an expected author is configured', () => {
+    expect(isTrustedCommentAuthor({ login: 'other-app[bot]' }, 'github-actions[bot]')).toBe(false)
+    expect(isTrustedCommentAuthor({ login: 'other-app[bot]' }, 'my-ci-user')).toBe(false)
+  })
+
+  it('falls back to the generic [bot] allowance only when no author is configured', () => {
+    expect(isTrustedCommentAuthor({ login: 'my-app[bot]' }, undefined)).toBe(true)
+    expect(isTrustedCommentAuthor({ login: 'github-actions[bot]' }, undefined)).toBe(true)
+  })
+
+  it('never trusts a missing user — a ghost author is not proof of ownership', () => {
+    expect(isTrustedCommentAuthor(undefined, 'github-actions[bot]')).toBe(false)
+    expect(isTrustedCommentAuthor(null, 'github-actions[bot]')).toBe(false)
+    expect(isTrustedCommentAuthor(undefined, undefined)).toBe(false)
   })
 
   it('rejects ordinary user logins', () => {
     expect(isTrustedCommentAuthor({ login: 'evil-user' }, 'github-actions[bot]')).toBe(false)
+    expect(isTrustedCommentAuthor({ login: 'evil-user' }, undefined)).toBe(false)
   })
 })
 
@@ -90,7 +106,7 @@ describe('upsertStickyComment', () => {
   it('updates the marked comment in place when present', async () => {
     const { api, comments, calls } = makeFakeApi([
       { id: 1, body: 'unrelated' },
-      { id: 2, body: `${STICKY_COMMENT_MARKER}\nold report` },
+      { id: 2, body: `${STICKY_COMMENT_MARKER}\nold report`, user: BOT },
     ])
     const body = `${STICKY_COMMENT_MARKER}\nnew report`
 
@@ -110,7 +126,7 @@ describe('upsertStickyComment', () => {
     }))
     const { api, calls } = makeFakeApi([
       ...filler,
-      { id: 101, body: `${STICKY_COMMENT_MARKER}\npage-two report` },
+      { id: 101, body: `${STICKY_COMMENT_MARKER}\npage-two report`, user: BOT },
     ])
     const body = `${STICKY_COMMENT_MARKER}\nupdated`
 
@@ -147,6 +163,33 @@ describe('upsertStickyComment', () => {
     expect(result.created).toBe(true)
     expect(calls.update).toBe(0)
     expect(comments.find((c) => c.id === 1)?.body).toContain('spoofed')
+  })
+
+  it('does not adopt a marked comment whose author is missing (ghost / redacted)', async () => {
+    const { api, calls } = makeFakeApi([{ id: 1, body: `${STICKY_COMMENT_MARKER}\nno author` }])
+
+    const result = await upsertStickyComment(api, {
+      ...params,
+      body: `${STICKY_COMMENT_MARKER}\nreal report`,
+    })
+
+    expect(result.created).toBe(true)
+    expect(calls.update).toBe(0)
+  })
+
+  it('does not adopt a marked comment from a different GitHub App when an author is configured', async () => {
+    const { api, calls } = makeFakeApi([
+      { id: 1, body: `${STICKY_COMMENT_MARKER}\nsome other app's report`, user: { login: 'other-app[bot]' } },
+    ])
+
+    const result = await upsertStickyComment(api, {
+      ...params,
+      body: `${STICKY_COMMENT_MARKER}\nreal report`,
+      expectedAuthor: 'github-actions[bot]',
+    })
+
+    expect(result.created).toBe(true)
+    expect(calls.update).toBe(0)
   })
 
   it('updates a comment owned by a custom expectedAuthor', async () => {

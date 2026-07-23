@@ -376,11 +376,22 @@ function credentialsInServerUrl(root: unknown): IFunctionResult[] {
   return results
 }
 
+/**
+ * The host of a server URL, lowercased, with an IPv6 literal's brackets removed
+ * (`http://[::1]:8080` → `::1`). Without the bracket case the authority parse
+ * stops at the first `:` and every IPv6 host reads as `[`, so loopback and
+ * private-range checks silently never match.
+ */
+function serverHost(url: string, scheme = '[a-z]+'): string | undefined {
+  const bracketed = new RegExp(`^${scheme}://\\[([^\\]\\s]+)\\]`, 'i').exec(url)
+  if (bracketed?.[1]) return bracketed[1].toLowerCase()
+  return new RegExp(`^${scheme}://([^/:\\s]+)`, 'i').exec(url)?.[1]?.toLowerCase()
+}
+
 function insecureTransport(root: unknown): IFunctionResult[] {
   const results: IFunctionResult[] = []
   eachServerUrl(root, (url, index) => {
-    const match = /^http:\/\/([^/:\s]+)/i.exec(url)
-    const host = match?.[1]?.toLowerCase()
+    const host = serverHost(url, 'http')
     if (host && host !== 'localhost' && !host.startsWith('127.') && host !== '::1') {
       results.push({
         message: `OWASP MCP01 (Secret Exposure): server "${url}" uses plain http — bearer tokens and API keys travel in cleartext. Use https.`,
@@ -653,8 +664,7 @@ function responseOversharing(root: unknown): IFunctionResult[] {
 function localOrPrivateServer(root: unknown): IFunctionResult[] {
   const results: IFunctionResult[] = []
   eachServerUrl(root, (url, index) => {
-    const match = /^[a-z]+:\/\/([^/:\s]+)/i.exec(url)
-    const host = match?.[1]?.toLowerCase()
+    const host = serverHost(url)
     if (!host) return
     const isLocal =
       host === 'localhost' ||

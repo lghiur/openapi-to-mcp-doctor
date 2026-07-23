@@ -4,10 +4,8 @@ import {
   Check,
   CheckCheck,
   CheckCircle2,
-  ChevronRight,
   CircleSlash,
   Download,
-  FileCode2,
   FileJson,
   FileText,
   Info,
@@ -35,25 +33,20 @@ import { CreatePr } from '@/features/github/components/CreatePr'
 import { SuggestionCard } from '@/features/analyze/components/SuggestionCard'
 import { DiagnosticCard } from '@/features/analyze/components/DiagnosticCard'
 import { buildOperationRows, OpStatusIcon } from '@/features/analyze/components/op-status'
+import { AgentActivityPanel } from '@/features/analyze/components/AgentActivity'
+import { Empty, Panel } from '@/features/analyze/components/Panel'
 import { PipelineStepper } from '@/features/analyze/components/PipelineStepper'
 import { errorFindingIds, partitionResolved } from '@/features/analyze/resolved'
-import type { FileReadActivity } from '@/features/analyze/state'
 import type { Resolution, Severity } from '@/types/domain'
 
-/**
- * One-line evidence of a grounding read: where in the file the agent looked,
- * why (route registration vs the handler it followed), and how much it read.
- */
-function fileEvidence(file: FileReadActivity): string {
-  const location = file.line !== undefined ? `${file.path}:${file.line}` : file.path
-  const parts: string[] = []
-  if (file.role === 'handler') parts.push(`handler ${file.symbol ?? ''}`.trimEnd())
-  else if (file.role === 'registration') parts.push('route registration')
-  if (file.linesRead !== undefined) parts.push(`${file.linesRead} lines`)
-  return parts.length > 0 ? `${location} · ${parts.join(' · ')}` : location
-}
-
 const SEVERITY_RANK: Record<Severity, number> = { error: 3, warning: 2, info: 1 }
+
+/** Dot colour for a finding in the collapsed "Resolved" list. */
+const SEVERITY_DOT: Record<Severity, string> = {
+  error: 'bg-error',
+  warning: 'bg-warning',
+  info: 'bg-muted-foreground',
+}
 
 /** Tick a live elapsed timer (seconds) until `stop` is true. */
 function useElapsed(stop: boolean, finalMs?: number): string {
@@ -94,24 +87,6 @@ export function AnalysisView({ jobId, repo }: { jobId: string; repo?: AnalysisRe
   const elapsed = useElapsed(!running, state.totals?.durationMs)
 
   const operations = useMemo(() => buildOperationRows(state), [state])
-  // Per-operation lookups so each agent row can expand to show what it examined.
-  const findingCountByOp = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const finding of state.findings) {
-      if (finding.operation) map.set(finding.operation, (map.get(finding.operation) ?? 0) + 1)
-    }
-    return map
-  }, [state.findings])
-  const filesByOp = useMemo(() => {
-    const map = new Map<string, FileReadActivity[]>()
-    for (const file of state.filesRead) {
-      if (!file.operation) continue
-      const files = map.get(file.operation) ?? []
-      if (!files.some((f) => f.path === file.path && f.role === file.role)) files.push(file)
-      map.set(file.operation, files)
-    }
-    return map
-  }, [state.filesRead])
   // Resolved = analysed (clean) or flagged; pending/analysing are still outstanding.
   const opsDone = useMemo(
     () => operations.filter((o) => o.status !== 'pending' && o.status !== 'analysing').length,
@@ -150,14 +125,15 @@ export function AnalysisView({ jobId, repo }: { jobId: string; repo?: AnalysisRe
 
   // Mirror review decisions onto the persisted run record (authed runs only —
   // for anonymous jobs there is no record and the request is a harmless 401/404).
+  // Always one request for the whole batch: "accept all" on a large run must not
+  // fan out into hundreds of concurrent rewrites of the same row.
   function syncResolution(ids: string[], resolution: Resolution): void {
-    for (const findingId of ids) {
-      void fetch(`/api/runs/${jobId}/resolution`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ findingId, resolution }),
-      }).catch(() => {})
-    }
+    if (ids.length === 0) return
+    void fetch(`/api/runs/${jobId}/resolution`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ updates: ids.map((findingId) => ({ findingId, resolution })) }),
+    }).catch(() => {})
   }
 
   function scrollToOperation(op: string): void {
@@ -238,6 +214,17 @@ export function AnalysisView({ jobId, repo }: { jobId: string; repo?: AnalysisRe
         />
       )}
 
+      {/* Run caveats from the server (e.g. only part of the codebase was read) */}
+      {state.notices.map((message) => (
+        <Notice
+          key={message}
+          tone="warning"
+          icon={TriangleAlert}
+          title="Partial input"
+          body={message}
+        />
+      ))}
+
       {/* Contextual banner for non-running / stalled states */}
       {phase === 'error' && (
         <Notice
@@ -312,124 +299,11 @@ export function AnalysisView({ jobId, repo }: { jobId: string; repo?: AnalysisRe
 
         {/* Agent activity */}
         <Panel icon={Sparkles} title="Agent activity">
-          {state.complete && state.totals && (
-            <div className="mb-3 rounded-lg border border-success/30 bg-success/8 p-3">
-              <p className="flex items-center gap-1.5 text-xs font-semibold text-success">
-                <CheckCircle2 className="size-3.5" />
-                Analysis complete — {elapsed}
-              </p>
-              <p className="mt-1 tnum text-xs text-muted-foreground">
-                {state.totals.total} findings · {state.totals.errors} errors ·{' '}
-                {state.totals.warnings} warnings · {state.totals.info} info
-              </p>
-            </div>
-          )}
-          {state.agents.length === 0 && <Empty>Spinning up agents…</Empty>}
-          <div className="space-y-2">
-            {state.agents.map((agent) => {
-              const expandable = agent.operations.length > 0
-              return (
-                <details
-                  key={agent.agentId}
-                  className="group rounded-lg border border-border/70 bg-surface-1/50 [&_summary::-webkit-details-marker]:hidden"
-                >
-                  <summary
-                    className={cn(
-                      'flex items-center justify-between gap-2 p-2.5',
-                      expandable ? 'cursor-pointer' : 'cursor-default',
-                    )}
-                  >
-                    <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
-                      {expandable && (
-                        <ChevronRight className="size-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
-                      )}
-                      {agent.done ? (
-                        agent.error !== undefined ? (
-                          <TriangleAlert className="size-3.5 shrink-0 text-destructive" />
-                        ) : (
-                          <CheckCircle2 className="size-3.5 shrink-0 text-success" />
-                        )
-                      ) : (
-                        <Spinner className="size-3.5 shrink-0 text-primary" />
-                      )}
-                      <span className="truncate">{agent.agentId}</span>
-                    </span>
-                    <span
-                      className={cn(
-                        'tnum shrink-0 truncate text-[11px]',
-                        agent.error !== undefined ? 'text-destructive' : 'text-muted-foreground',
-                      )}
-                      title={agent.error}
-                    >
-                      {agent.done
-                        ? agent.error !== undefined
-                          ? `failed — ${agent.error}`
-                          : `${agent.findingsCount ?? 0} findings · ${((agent.durationMs ?? 0) / 1000).toFixed(1)}s`
-                        : 'running…'}
-                    </span>
-                  </summary>
-                  {expandable && (
-                    <div className="space-y-1.5 border-t border-border/60 px-2.5 py-2">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Examined {agent.operations.length} operation
-                        {agent.operations.length === 1 ? '' : 's'}
-                      </p>
-                      {agent.operations.map((op) => {
-                        const files = filesByOp.get(op) ?? []
-                        const count = findingCountByOp.get(op) ?? 0
-                        return (
-                          <div key={op}>
-                            <button
-                              type="button"
-                              onClick={() => scrollToOperation(op)}
-                              className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/60"
-                            >
-                              <span className="truncate font-mono text-[11px]">{op}</span>
-                              {count > 0 && (
-                                <span className="tnum shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground">
-                                  {count}
-                                </span>
-                              )}
-                            </button>
-                            {files.length > 0 && (
-                              <ul className="mt-0.5 space-y-0.5 pl-3">
-                                {files.map((file) => (
-                                  <li
-                                    key={`${file.path}-${file.role ?? ''}`}
-                                    className="flex items-center gap-1 truncate font-mono text-[10px] text-muted-foreground"
-                                  >
-                                    <FileCode2 className="size-3 shrink-0 text-primary/70" />
-                                    <span className="truncate">{fileEvidence(file)}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </details>
-              )
-            })}
-            {state.filesRead.length > 0 && (
-              <div className="rounded-lg border border-border/70 bg-surface-1/50 p-2.5">
-                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Code checked
-                </p>
-                {state.filesRead.map((file, i) => (
-                  <div key={`${file.path}-${i}`} className="flex items-baseline gap-1.5">
-                    <p className="truncate font-mono text-[11px]">{fileEvidence(file)}</p>
-                    {file.operation !== undefined && (
-                      <p className="shrink-0 truncate font-mono text-[10px] text-muted-foreground">
-                        {file.operation}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <AgentActivityPanel
+            state={state}
+            elapsed={elapsed}
+            onSelectOperation={scrollToOperation}
+          />
         </Panel>
 
         {/* Findings */}
@@ -553,11 +427,7 @@ export function AnalysisView({ jobId, repo }: { jobId: string; repo?: AnalysisRe
                             aria-hidden="true"
                             className={cn(
                               'size-1.5 shrink-0 rounded-full',
-                              finding.severity === 'error'
-                                ? 'bg-error'
-                                : finding.severity === 'warning'
-                                  ? 'bg-warning'
-                                  : 'bg-muted-foreground',
+                              SEVERITY_DOT[finding.severity],
                             )}
                           />
                           <span className="truncate font-mono text-[11px]">
@@ -627,46 +497,6 @@ export function AnalysisView({ jobId, repo }: { jobId: string; repo?: AnalysisRe
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function Panel({
-  icon: Icon,
-  title,
-  count,
-  action,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  title: string
-  count?: number
-  action?: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
-      <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          <Icon className="size-3.5" />
-          {title}
-          {count !== undefined && (
-            <span className="tnum rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground">
-              {count}
-            </span>
-          )}
-        </h2>
-        {action}
-      </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>
-    </section>
-  )
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex h-full min-h-[80px] items-center justify-center px-4 text-center text-sm text-muted-foreground">
-      {children}
     </div>
   )
 }

@@ -79,9 +79,16 @@ runs:
       uses: actions/setup-node@v4
       with:
         node-version: '22'
+        # Cache against the action's own lockfile, not the consumer's — the
+        # install below is the action's dependency tree.
+        cache: 'npm'
+        cache-dependency-path: ${{ github.action_path }}/package-lock.json
     - name: Install dependencies
       shell: bash
-      run: npm ci --prefix ${{ github.action_path }}
+      # --omit=dev skips the web app's build/test tooling (typescript, vitest,
+      # eslint, tailwind, testing-library); the Action needs only the engine +
+      # CLI runtime deps, which includes tsx — hence tsx is a dependency.
+      run: npm ci --prefix ${{ github.action_path }} --omit=dev
     - name: Run MCP Doctor
       shell: bash
       working-directory: ${{ github.workspace }}

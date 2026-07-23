@@ -12,15 +12,35 @@ import { BEHAVIORS, type Behavior, type DirectionResult, type LocatedFinding } f
  * review comments. `cli/action.ts` stays a thin I/O shell over this module.
  */
 
-/** The ladder is cumulative: each level does everything below it. */
-export function behaviorAtLeast(behavior: Behavior, min: Behavior): boolean {
-  return BEHAVIORS.indexOf(behavior) >= BEHAVIORS.indexOf(min)
+// ---------------------------------------------------------------------------
+// Action inputs & tokens
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate an enum-valued action input. Unset is fine (caller applies the
+ * default); anything not in the union is an error the caller must surface.
+ */
+export function parseChoice<T extends string>(
+  raw: string | undefined,
+  allowed: readonly T[],
+): { ok: true; value: T | undefined } | { ok: false; message: string } {
+  if (raw === undefined) return { ok: true, value: undefined }
+  if ((allowed as readonly string[]).includes(raw)) return { ok: true, value: raw as T }
+  return { ok: false, message: `'${raw}' is not one of: ${allowed.join(' | ')}` }
 }
 
 /** Parse the `behavior` input; unset → 'comment', unknown → undefined (caller errors). */
 export function parseBehavior(raw: string | undefined): Behavior | undefined {
   if (raw === undefined) return 'comment'
   return (BEHAVIORS as readonly string[]).includes(raw) ? (raw as Behavior) : undefined
+}
+
+/** Explicit `github-token` input wins; otherwise the workflow's GITHUB_TOKEN env. */
+export function resolveGithubToken(
+  inputToken: string | undefined,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  return inputToken ?? env.GITHUB_TOKEN ?? undefined
 }
 
 /**
@@ -31,12 +51,13 @@ export function defaultFailOn(isPr: boolean): FailOn {
   return isPr ? 'never' : 'error'
 }
 
-/** Explicit `github-token` input wins; otherwise the workflow's GITHUB_TOKEN env. */
-export function resolveGithubToken(
-  inputToken: string | undefined,
-  env: Record<string, string | undefined>,
-): string | undefined {
-  return inputToken ?? env.GITHUB_TOKEN ?? undefined
+// ---------------------------------------------------------------------------
+// Behavior ladder & delta gating
+// ---------------------------------------------------------------------------
+
+/** The ladder is cumulative: each level does everything below it. */
+export function behaviorAtLeast(behavior: Behavior, min: Behavior): boolean {
+  return BEHAVIORS.indexOf(behavior) >= BEHAVIORS.indexOf(min)
 }
 
 /** lint-only PRs (no spec/route changes) must cost zero LLM calls. */
@@ -65,25 +86,27 @@ export function deltaGateSummary(newFindings: ReportFinding[]): {
 }
 
 /**
- * Validate an enum-valued action input. Unset is fine (caller applies the
- * default); anything not in the union is an error the caller must surface.
+ * Closed-lifecycle decision for the stacked fix PR. A MERGED source PR's
+ * fixes survive on the base branch, so the fix PR is re-pointed there to land
+ * on its own. An ABANDONED (closed-unmerged) source PR must NOT have its fix
+ * PR re-pointed — that would propose the abandoned branch's spec content into
+ * the base branch — so the fix PR is closed instead.
  */
-export function parseChoice<T extends string>(
-  raw: string | undefined,
-  allowed: readonly T[],
-): { ok: true; value: T | undefined } | { ok: false; message: string } {
-  if (raw === undefined) return { ok: true, value: undefined }
-  if ((allowed as readonly string[]).includes(raw)) return { ok: true, value: raw as T }
-  return { ok: false, message: `'${raw}' is not one of: ${allowed.join(' | ')}` }
+export function closedLifecycleAction(merged: boolean | undefined): 'repoint' | 'close' {
+  return merged === true ? 'repoint' : 'close'
 }
 
+// ---------------------------------------------------------------------------
+// Git plumbing
+// ---------------------------------------------------------------------------
+
 /**
- * Stable review-comment key for a finding: hash of the delta identity
- * (rule + operation + spec path) — never the LLM-worded message, so re-runs
- * with different wording keep the same inline comment.
+ * Refs passed to git must never carry shell metacharacters, and must not start
+ * with `-` (execFile is shell-safe, but a leading dash would be parsed as an
+ * option by git itself).
  */
-export function findingMarkerKey(finding: ReportFinding): string {
-  return createHash('sha256').update(findingKey(finding)).digest('hex').slice(0, 16)
+export function isSafeGitRef(ref: string): boolean {
+  return /^[\w./-]+$/.test(ref) && !ref.startsWith('-')
 }
 
 /**
@@ -100,6 +123,10 @@ export function renamedFrom(nameStatus: string, headPath: string): string | unde
   }
   return undefined
 }
+
+// ---------------------------------------------------------------------------
+// GitHub API error classification
+// ---------------------------------------------------------------------------
 
 /**
  * The consumer repo hasn't enabled "Allow GitHub Actions to create and approve
@@ -133,16 +160,10 @@ export function isPermissionDenied(error: unknown): boolean {
   )
 }
 
-/**
- * Closed-lifecycle decision for the stacked fix PR. A MERGED source PR's
- * fixes survive on the base branch, so the fix PR is re-pointed there to land
- * on its own. An ABANDONED (closed-unmerged) source PR must NOT have its fix
- * PR re-pointed — that would propose the abandoned branch's spec content into
- * the base branch — so the fix PR is closed instead.
- */
-export function closedLifecycleAction(merged: boolean | undefined): 'repoint' | 'close' {
-  return merged === true ? 'repoint' : 'close'
-}
+// ---------------------------------------------------------------------------
+// Scan-output contracts — string-scraping of `runScan` stdout/stderr. Each
+// parser documents its producer; change producer and parser only together.
+// ---------------------------------------------------------------------------
 
 /**
  * Failed-agent lines from scan stderr ("✗ worker-1 failed: …"). AI workers
@@ -163,32 +184,6 @@ export function extractAgentFailures(stderr: string): string[] {
     .filter((line) => line.length > 0)
 }
 
-const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'])
-
-/**
- * Build an engine `OperationSelection` from findings' operation labels
- * ("GET /tyk/debug/goroutine-count" → `{ path, methods: ['get'] }`), merging
- * methods per path. Findings without a parsable operation (document-level, or
- * a label that isn't `METHOD /path`) are skipped; when nothing is parsable the
- * result is undefined — the caller then has no operations to scope a fix to.
- */
-export function selectionFromFindings(findings: ReportFinding[]): OperationSelection | undefined {
-  const byPath = new Map<string, Set<string>>()
-  for (const finding of findings) {
-    if (finding.operation === undefined) continue
-    const match = /^(\S+)\s+(\/\S*)$/.exec(finding.operation.trim())
-    if (!match) continue
-    const method = (match[1] as string).toLowerCase()
-    if (!HTTP_METHODS.has(method)) continue
-    const path = match[2] as string
-    const methods = byPath.get(path) ?? new Set<string>()
-    methods.add(method)
-    byPath.set(path, methods)
-  }
-  if (byPath.size === 0) return undefined
-  return [...byPath.entries()].map(([path, methods]) => ({ path, methods: [...methods] }))
-}
-
 /**
  * Applied-fix count from a fix-mode scan's stdout ("Applied N fix(es), …").
  *
@@ -203,26 +198,17 @@ export function parseAppliedFixCount(fixStdout: string): number | undefined {
   return match ? Number(match[1]) : undefined
 }
 
-/**
- * Untrusted spec/LLM text must never ping GitHub users or teams: a zero-width
- * space after each `@` keeps the text readable but kills the mention.
- */
-export function neutralizeMentions(text: string): string {
-  return text.replace(/@(?=\w)/g, '@\u200b')
-}
-
-/** One-line, pipe-safe, mention-safe markdown table cell. */
-export function mdCell(value: string): string {
-  return neutralizeMentions(value.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|'))
-}
+// ---------------------------------------------------------------------------
+// Locating & selecting findings
+// ---------------------------------------------------------------------------
 
 /**
- * Refs passed to git must never carry shell metacharacters, and must not start
- * with `-` (execFile is shell-safe, but a leading dash would be parsed as an
- * option by git itself).
+ * Stable review-comment key for a finding: hash of the delta identity
+ * (rule + operation + spec path) — never the LLM-worded message, so re-runs
+ * with different wording keep the same inline comment.
  */
-export function isSafeGitRef(ref: string): boolean {
-  return /^[\w./-]+$/.test(ref) && !ref.startsWith('-')
+export function findingMarkerKey(finding: ReportFinding): string {
+  return createHash('sha256').update(findingKey(finding)).digest('hex').slice(0, 16)
 }
 
 /**
@@ -270,6 +256,49 @@ export function locateFindings(
     }
   }
   return located
+}
+
+const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'])
+
+/**
+ * Build an engine `OperationSelection` from findings' operation labels
+ * ("GET /tyk/debug/goroutine-count" → `{ path, methods: ['get'] }`), merging
+ * methods per path. Findings without a parsable operation (document-level, or
+ * a label that isn't `METHOD /path`) are skipped; when nothing is parsable the
+ * result is undefined — the caller then has no operations to scope a fix to.
+ */
+export function selectionFromFindings(findings: ReportFinding[]): OperationSelection | undefined {
+  const byPath = new Map<string, Set<string>>()
+  for (const finding of findings) {
+    if (finding.operation === undefined) continue
+    const match = /^(\S+)\s+(\/\S*)$/.exec(finding.operation.trim())
+    if (!match) continue
+    const method = (match[1] as string).toLowerCase()
+    if (!HTTP_METHODS.has(method)) continue
+    const path = match[2] as string
+    const methods = byPath.get(path) ?? new Set<string>()
+    methods.add(method)
+    byPath.set(path, methods)
+  }
+  if (byPath.size === 0) return undefined
+  return [...byPath.entries()].map(([path, methods]) => ({ path, methods: [...methods] }))
+}
+
+// ---------------------------------------------------------------------------
+// Markdown rendering — everything here neutralizes untrusted spec/LLM text.
+// ---------------------------------------------------------------------------
+
+/**
+ * Untrusted spec/LLM text must never ping GitHub users or teams: a zero-width
+ * space after each `@` keeps the text readable but kills the mention.
+ */
+export function neutralizeMentions(text: string): string {
+  return text.replace(/@(?=\w)/g, '@\u200b')
+}
+
+/** One-line, pipe-safe, mention-safe markdown table cell. */
+export function mdCell(value: string): string {
+  return neutralizeMentions(value.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|'))
 }
 
 /**

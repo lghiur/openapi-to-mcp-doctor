@@ -43,7 +43,6 @@ export default async function RunDetailPage({ params }: { params: Promise<{ runI
     before: f.before,
     after: f.resolvedContent ?? f.after,
     resolution: f.resolution,
-    autoFixed: f.autoFixed,
   }))
 
   return (

@@ -1,28 +1,25 @@
 import { getOptionalSession } from '@/lib/auth'
 import { getRunStore } from '@/lib/db'
-import { ResolutionSchema } from '@/types/api'
+import { ResolutionRequestSchema } from '@/types/api'
 
 interface RouteContext {
   params: Promise<{ id: string }>
 }
 
 /**
- * POST /api/runs/[id]/resolution — record a user's accept/reject/edit decision
- * on a persisted run's finding. This is the single sanctioned post-run mutation
- * on history records (append-only otherwise).
+ * POST /api/runs/[id]/resolution — record a user's accept/reject/edit decisions
+ * on a persisted run's findings. This is the single sanctioned post-run mutation
+ * on history records (append-only otherwise). Takes one decision or a batch;
+ * either way the run row is read and rewritten exactly once.
  */
 export async function POST(request: Request, context: RouteContext): Promise<Response> {
   const session = await getOptionalSession()
   if (!session) return Response.json({ error: 'Not authenticated.' }, { status: 401 })
 
   const { id } = await context.params
-  const body = (await request.json().catch(() => ({}))) as {
-    findingId?: unknown
-    resolution?: unknown
-  }
-  const findingId = typeof body.findingId === 'string' ? body.findingId : ''
-  const resolution = ResolutionSchema.safeParse(body.resolution)
-  if (!findingId || !resolution.success) {
+  const body = await request.json().catch(() => null)
+  const updates = ResolutionRequestSchema.safeParse(body)
+  if (!updates.success) {
     return Response.json({ error: 'Invalid resolution request.' }, { status: 400 })
   }
 
@@ -35,6 +32,6 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
   const run = email ? store.getRunForUser(id, email) : null
   if (!run) return Response.json({ error: 'Run not found.' }, { status: 404 })
 
-  store.updateResolution(id, findingId, resolution.data)
-  return Response.json({ ok: true })
+  store.updateResolutions(id, updates.data)
+  return Response.json({ ok: true, updated: updates.data.length })
 }

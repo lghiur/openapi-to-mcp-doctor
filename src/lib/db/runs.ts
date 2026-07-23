@@ -1,6 +1,12 @@
 import Database from 'better-sqlite3'
 import type { AgentRecord, AnalysisRun, FindingRecord, Resolution } from '@/types/domain'
 
+/** A single accept/reject/edit decision, as recorded against a run's finding. */
+export interface ResolutionUpdate {
+  findingId: string
+  resolution: Resolution
+}
+
 export interface RunStore {
   saveRun(run: AnalysisRun, userId?: string): void
   /**
@@ -17,6 +23,12 @@ export interface RunStore {
    */
   getRunForUser(id: string, userId: string): AnalysisRun | null
   updateResolution(runId: string, findingId: string, resolution: Resolution): void
+  /**
+   * Bulk form of `updateResolution`: one read + one write for the whole batch.
+   * "Accept all"/"Reject all" on a large run would otherwise re-read and rewrite
+   * the row once per finding.
+   */
+  updateResolutions(runId: string, updates: readonly ResolutionUpdate[]): void
   /** Record the fix PR opened for a run (the only other post-run mutation). */
   setPrInfo(runId: string, info: { prUrl: string; prBranch: string }): void
   close(): void
@@ -124,9 +136,17 @@ export function openRunStore(file: string): RunStore {
     },
 
     updateResolution(runId, findingId, resolution) {
+      this.updateResolutions(runId, [{ findingId, resolution }])
+    },
+
+    updateResolutions(runId, updates) {
       const run = this.getRun(runId)
       if (!run) return
-      const findings = run.findings.map((f) => (f.id === findingId ? { ...f, resolution } : f))
+      const byId = new Map(updates.map((u) => [u.findingId, u.resolution]))
+      const findings = run.findings.map((f) => {
+        const resolution = byId.get(f.id)
+        return resolution === undefined ? f : { ...f, resolution }
+      })
       const counts = countResolutions(findings)
       db.prepare(
         `UPDATE analysis_run

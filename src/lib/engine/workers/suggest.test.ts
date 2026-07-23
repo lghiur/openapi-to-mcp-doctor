@@ -129,6 +129,16 @@ describe('createSuggester', () => {
     expect(enriched[0]?.id).toBe('f-desc')
   })
 
+  it('rejects when every chunk fails, so the caller can mark the agent errored', async () => {
+    const generate = vi.fn(async () => {
+      throw new Error('gateway down')
+    })
+    const suggest = createSuggester({ model: fakeModel, generate, chunkSize: 1 })
+    await expect(suggest([PARAM_FINDING, DESC_FINDING], operations, '3.0')).rejects.toThrow(
+      'gateway down',
+    )
+  })
+
   it('ignores findings that already carry a fix or are not operation-scoped', async () => {
     const generate = generatorReturning([{ suggestions: [] }])
     const suggest = createSuggester({ model: fakeModel, generate })

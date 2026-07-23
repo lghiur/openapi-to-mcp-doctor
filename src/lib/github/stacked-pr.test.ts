@@ -240,6 +240,27 @@ describe('ensureStackedFixPr', () => {
     )
   })
 
+  it('rethrows a non-422 createRef failure instead of masking it as updateRef', async () => {
+    const repo = fakeRepo({
+      branches: { 'feature-x': { 'api/openapi.yaml': 'openapi: 3.0.0\n' } },
+    })
+    const forbidden = apiError(403, 'Resource not accessible by integration')
+    const api: StackedPrApi = {
+      ...repo.api,
+      git: {
+        ...repo.api.git,
+        createRef: async () => {
+          throw forbidden
+        },
+      },
+    }
+
+    await expect(ensureStackedFixPr(api, params)).rejects.toThrow(
+      /not accessible by integration/,
+    )
+    expect(repo.calls.updateRef).toBe(0)
+  })
+
   it('skips the commit when the branch content already matches', async () => {
     const repo = fakeRepo({
       branches: { 'feature-x': { 'api/openapi.yaml': params.patchedContent } },

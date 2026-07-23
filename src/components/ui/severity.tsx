@@ -1,4 +1,11 @@
-import { AlertTriangle, CircleAlert, Info, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
+import {
+  AlertTriangle,
+  CircleAlert,
+  Info,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+} from 'lucide-react'
 import type { Confidence, Severity } from '@/types/domain'
 import { Badge } from '@/components/ui/badge'
 import { OWASP_RISK_NAMES } from '@/lib/engine/linter/rulesets/owasp-meta'
@@ -48,5 +55,3 @@ export function OwaspBadge({ owasp }: { owasp: string }) {
     </Badge>
   )
 }
-
-export { ShieldAlert }

@@ -50,6 +50,25 @@ export const AnalyzeRequestSchema = z.object({
 export type AnalyzeRequest = z.infer<typeof AnalyzeRequestSchema>
 
 // ----------------------------------------------------------------------------
+// Resolution request — POST /api/runs/[id]/resolution body
+// ----------------------------------------------------------------------------
+
+export const ResolutionUpdateSchema = z.object({
+  findingId: z.string().min(1),
+  resolution: ResolutionSchema,
+})
+
+/**
+ * Accepts either a single decision (`{ findingId, resolution }`) or a batch
+ * (`{ updates: [...] }`) and normalises both to an array, so bulk "accept all"
+ * costs one request while the single-item shape keeps working.
+ */
+export const ResolutionRequestSchema = z.union([
+  ResolutionUpdateSchema.transform((update) => [update]),
+  z.object({ updates: z.array(ResolutionUpdateSchema).min(1) }).transform((body) => body.updates),
+])
+
+// ----------------------------------------------------------------------------
 // JSON report — docs/research/ux-design.md. Stable from v1: adding fields is
 // non-breaking; removing/renaming is a major version bump.
 // ----------------------------------------------------------------------------

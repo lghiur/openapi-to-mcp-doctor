@@ -128,6 +128,34 @@ paths:
     const rules = gaps.map((g) => (g as { rule: string }).rule)
     expect(rules).toContain('mcp-response-schema-required')
   })
+
+  it('does NOT forward gaps when a fix-suggester is configured — it authors that content', async () => {
+    // Both mechanisms select the same findings. Running them together bills two
+    // LLM passes for one gap and yields two differently-worded fixes for it, so
+    // exactly one authors gap content: the suggester when present, else workers.
+    const gappySpec = `openapi: 3.0.3
+info:
+  title: T
+  version: 1.0.0
+paths:
+  /gaps:
+    get:
+      operationId: gappy_operation
+      responses:
+        '200':
+          description: ok`
+    const contexts: Array<{ gaps?: Record<string, unknown[]> }> = []
+    const runWorker = vi.fn(async (_batch: OperationRef[], ctx: WorkerContext) => {
+      contexts.push(ctx)
+      return []
+    })
+    await drain(
+      runAnalysis(gappySpec, {
+        ai: { runWorker, runPostProcess: async () => [], runSuggest: async () => [] },
+      }),
+    )
+    expect(contexts[0]?.gaps).toBeUndefined()
+  })
 })
 
 describe('runAnalysis — fix-suggester enrichment', () => {

@@ -12,7 +12,8 @@
  * The bare marker literal is owned by `./comments`; `REVIEW_MARKER` is kept as
  * an alias so existing imports stay valid.
  */
-import { DEFAULT_BOT_LOGIN, isTrustedCommentAuthor, REVIEW_COMMENT_MARKER } from './comments'
+import { isTrustedCommentAuthor, REVIEW_COMMENT_MARKER } from './comments'
+import { errorMessage, errorStatus, isAuthOrRateLimitError } from './errors'
 
 export const REVIEW_MARKER = REVIEW_COMMENT_MARKER
 
@@ -96,15 +97,31 @@ export interface SyncPrReviewParams {
   /** Head SHA the review comments anchor to. */
   commitSha: string
   comments: ReviewCommentInput[]
-  /** Login owning our comments (besides any `[bot]`). Default github-actions[bot]. */
+  /**
+   * Login owning our comments. When unset, any `[bot]` author is accepted —
+   * see `isTrustedCommentAuthor` for the residual risk that allowance carries.
+   */
   expectedAuthor?: string
+}
+
+/**
+ * Why posting stopped early: an authentication, permission or rate-limit
+ * failure, as opposed to individual comments that merely could not be anchored.
+ * Callers should report it — the run posted less than it wanted to.
+ */
+export interface ReviewSyncFailure {
+  /** HTTP status when the API surfaced one (401/403/429). */
+  status?: number
+  message: string
 }
 
 export interface SyncPrReviewResult {
   posted: number
   deleted: number
-  /** Comments that could not be placed (e.g. line not in the diff). */
+  /** Comments that could not be placed (line not in the diff, or not attempted). */
   skipped: Array<{ path: string; line: number }>
+  /** Present when posting was aborted by an auth/permission/rate-limit failure. */
+  failure?: ReviewSyncFailure
 }
 
 const PER_PAGE = 100
@@ -136,22 +153,97 @@ async function listAllReviewComments(
   return all
 }
 
+/** One comment ready to post: the marked body plus its anchor. */
+interface PendingComment {
+  path: string
+  line: number
+  body: string
+  identity: string
+}
+
+const anchorOf = ({ path, line }: PendingComment): { path: string; line: number } => ({ path, line })
+
+function failureOf(error: unknown): ReviewSyncFailure {
+  const status = errorStatus(error)
+  return { ...(status !== undefined ? { status } : {}), message: errorMessage(error) }
+}
+
+/**
+ * Post the new comments: one batch COMMENT review, falling back to individual
+ * comments when the batch is rejected for anchoring reasons (typically 422: a
+ * line is outside the diff).
+ *
+ * The two failure kinds are kept apart. A comment GitHub refuses to anchor is
+ * expected and lands in `skipped`. An auth, permission or rate-limit failure is
+ * not: it aborts immediately (retrying every comment under a 403/429 only
+ * deepens the throttle) and is reported as `failure`, with the comments that
+ * were never attempted listed in `skipped` too.
+ */
+async function postComments(
+  api: ReviewApi,
+  params: SyncPrReviewParams,
+  toPost: PendingComment[],
+): Promise<Omit<SyncPrReviewResult, 'deleted'>> {
+  const { owner, repo, prNumber, commitSha } = params
+
+  try {
+    await api.pulls.createReview({
+      owner,
+      repo,
+      pull_number: prNumber,
+      commit_id: commitSha,
+      event: 'COMMENT',
+      comments: toPost.map(({ path, line, body }) => ({ path, line, body })),
+    })
+    return { posted: toPost.length, skipped: [] }
+  } catch (error) {
+    if (isAuthOrRateLimitError(error)) {
+      return { posted: 0, skipped: toPost.map(anchorOf), failure: failureOf(error) }
+    }
+  }
+
+  const skipped: Array<{ path: string; line: number }> = []
+  let posted = 0
+  for (const [index, comment] of toPost.entries()) {
+    try {
+      await api.pulls.createReviewComment({
+        owner,
+        repo,
+        pull_number: prNumber,
+        commit_id: commitSha,
+        path: comment.path,
+        line: comment.line,
+        body: comment.body,
+      })
+      posted++
+    } catch (error) {
+      if (isAuthOrRateLimitError(error)) {
+        return {
+          posted,
+          skipped: [...skipped, ...toPost.slice(index).map(anchorOf)],
+          failure: failureOf(error),
+        }
+      }
+      skipped.push(anchorOf(comment))
+    }
+  }
+  return { posted, skipped }
+}
+
 /**
  * Reconcile MCP Doctor's inline review comments with the wanted set.
  *
  * - Existing marker-owned comments (marker prefix + trusted author) whose
  *   key/path/line match a wanted comment are kept — LLM re-wording alone never
  *   churns comments; stale ones are deleted; foreign comments are untouched.
- * - New comments go out as a single COMMENT review. If that batch call fails
- *   (typically 422: a line is outside the diff), each comment is retried
- *   individually and per-comment failures land in `skipped` — never thrown.
+ * - New comments are posted by `postComments`; nothing there is thrown, but a
+ *   permission/rate-limit abort is reported as `failure`.
  */
 export async function syncPrReview(
   api: ReviewApi,
   params: SyncPrReviewParams,
 ): Promise<SyncPrReviewResult> {
-  const { owner, repo, prNumber, commitSha } = params
-  const expectedAuthor = params.expectedAuthor ?? DEFAULT_BOT_LOGIN
+  const { owner, repo, prNumber, expectedAuthor } = params
 
   const existing = await listAllReviewComments(api, owner, repo, prNumber)
   const ours = existing.filter(
@@ -184,41 +276,7 @@ export async function syncPrReview(
   }
 
   const toPost = wanted.filter((c) => !keptIdentities.has(c.identity))
-  const skipped: Array<{ path: string; line: number }> = []
-  let posted = 0
+  if (toPost.length === 0) return { posted: 0, deleted, skipped: [] }
 
-  if (toPost.length > 0) {
-    try {
-      await api.pulls.createReview({
-        owner,
-        repo,
-        pull_number: prNumber,
-        commit_id: commitSha,
-        event: 'COMMENT',
-        comments: toPost.map(({ path, line, body }) => ({ path, line, body })),
-      })
-      posted = toPost.length
-    } catch {
-      // Batch review rejected (e.g. one line outside the diff): retry each
-      // comment on its own so one bad anchor doesn't sink the rest.
-      for (const comment of toPost) {
-        try {
-          await api.pulls.createReviewComment({
-            owner,
-            repo,
-            pull_number: prNumber,
-            commit_id: commitSha,
-            path: comment.path,
-            line: comment.line,
-            body: comment.body,
-          })
-          posted++
-        } catch {
-          skipped.push({ path: comment.path, line: comment.line })
-        }
-      }
-    }
-  }
-
-  return { posted, deleted, skipped }
+  return { ...(await postComments(api, params, toPost)), deleted }
 }

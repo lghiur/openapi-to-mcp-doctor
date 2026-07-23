@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveSpecLine } from '@/lib/engine/lines/resolve'
+
+// Spy on the YAML parse so the memo below is observable. The spy delegates to
+// the real parser, so every other assertion in this file exercises real code.
+vi.mock('yaml', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('yaml')>()
+  return { ...actual, parseDocument: vi.fn(actual.parseDocument) }
+})
+const { parseDocument } = await import('yaml')
 
 const YAML_SPEC = [
   'openapi: 3.0.3', // line 1
@@ -70,5 +78,31 @@ describe('resolveSpecLine', () => {
   it('returns undefined for an empty document', () => {
     expect(resolveSpecLine('', ['paths'])).toBeUndefined()
     expect(resolveSpecLine('# just a comment\n', ['paths'])).toBeUndefined()
+  })
+})
+
+describe('resolveSpecLine — parse memo', () => {
+  // Callers resolve dozens-to-hundreds of findings against ONE spec text; a
+  // per-finding parse of a multi-MB spec dominates the run.
+  beforeEach(() => {
+    // The memo is module-level and persists across tests, so prime it with a
+    // throwaway spec (never equal to the specs below) before clearing the spy —
+    // each test then starts from a known-cold state regardless of ordering.
+    resolveSpecLine('{}\n', [])
+    vi.mocked(parseDocument).mockClear()
+  })
+
+  it('parses a given spec text once across many lookups', () => {
+    for (let i = 0; i < 25; i++) {
+      resolveSpecLine(YAML_SPEC, ['paths', '/users/{id}', 'get'])
+    }
+    expect(parseDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-parses when the spec text changes, and stays correct either way', () => {
+    expect(resolveSpecLine(YAML_SPEC, ['paths', '/users/{id}', 'get'])).toBe(4)
+    expect(resolveSpecLine(YAML_SEQ_SPEC, ['servers', 1])).toBe(3)
+    expect(resolveSpecLine(YAML_SPEC, ['paths', '/users/{id}', 'get'])).toBe(4)
+    expect(parseDocument).toHaveBeenCalledTimes(3)
   })
 })

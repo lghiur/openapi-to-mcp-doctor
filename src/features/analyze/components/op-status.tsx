@@ -13,6 +13,18 @@ export interface OperationRow {
 const RANK: Record<Severity, number> = { error: 3, warning: 2, info: 1 }
 
 /**
+ * An operation's rail status. Findings win over progress: once an op has an
+ * error or a warning that is what the row reports, however far the run has got.
+ */
+function opStatus(worst: number, resolved: boolean, active: boolean): OpStatus {
+  if (worst === RANK.error) return 'error'
+  if (worst === RANK.warning) return 'warning'
+  if (resolved) return 'clean'
+  if (active) return 'analysing'
+  return 'pending'
+}
+
+/**
  * Derive the operations rail from stream state. Every operation known up front
  * (from analysis_started) is seeded as `pending`, so the panel shows the full
  * "X of N" denominator from the start; worker assignments and findings then
@@ -60,17 +72,7 @@ export function buildOperationRows(state: AnalysisState): OperationRow[] {
     // (structural-only mode); a completed run resolves everything left over.
     const resolved = (hasWorkers ? r.done : structuralDone) || state.complete
     const active = hasWorkers ? r.started && !r.done : structuralActive
-    const status: OpStatus =
-      r.worst === 3
-        ? 'error'
-        : r.worst === 2
-          ? 'warning'
-          : resolved
-            ? 'clean'
-            : active
-              ? 'analysing'
-              : 'pending'
-    return { operation, findings: r.count, status }
+    return { operation, findings: r.count, status: opStatus(r.worst, resolved, active) }
   })
 
   return rows.sort((a, b) => b.findings - a.findings || a.operation.localeCompare(b.operation))

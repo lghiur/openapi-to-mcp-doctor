@@ -138,6 +138,21 @@ paths:
       description: Returns x from the configured upstream server for this account.${OK_RESPONSE}`
     expect(await rulesFor(spec)).toContain('owasp-insecure-transport')
   })
+
+  // An IPv6 literal is bracketed in a URL authority, so the host is "[::1]".
+  // Both the loopback exemption here and the private-address check in MCP09
+  // must see through the brackets.
+  it('exempts the IPv6 loopback from the insecure-transport warning', async () => {
+    const spec = `${HEAD}
+servers:
+  - url: http://[::1]:8080
+paths:
+  /x:
+    get:
+      operationId: get_x
+      description: Returns x from the configured upstream server for this account.${OK_RESPONSE}`
+    expect(await rulesFor(spec)).not.toContain('owasp-insecure-transport')
+  })
 })
 
 describe('MCP07 — Insufficient Auth & Authz', () => {
@@ -302,6 +317,18 @@ describe('MCP09 — Shadow MCP Servers', () => {
     const spec = `${HEAD}
 servers:
   - url: http://localhost:8080
+paths:
+  /x:
+    get:
+      operationId: get_x
+      description: Returns x from the configured upstream server for this account.${OK_RESPONSE}`
+    expect(await rulesFor(spec)).toContain('owasp-local-or-private-server')
+  })
+
+  it('flags an IPv6 loopback server (brackets must not hide the host)', async () => {
+    const spec = `${HEAD}
+servers:
+  - url: http://[::1]:8080
 paths:
   /x:
     get:

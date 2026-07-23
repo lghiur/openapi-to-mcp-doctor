@@ -4,8 +4,8 @@ import { Check, Pencil, RotateCcw, TriangleAlert, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { ConfidenceBadge, OwaspBadge, SeverityBadge } from '@/components/ui/severity'
 import { cn } from '@/lib/utils'
+import { FindingHeader } from '@/features/analyze/components/FindingHeader'
 import type { Decision } from '@/features/analyze/review'
 import type { SSEFinding } from '@/types/domain'
 
@@ -55,6 +55,27 @@ function DiffBlock({
   )
 }
 
+function decisionLabel(accepted: boolean, edited: boolean): string {
+  if (!accepted) return 'Rejected'
+  return edited ? 'Accepted · edited' : 'Accepted'
+}
+
+/** Outcome chip shown in place of the action buttons once a decision is made. */
+function DecisionLabel({ decision, edited }: { decision: Decision; edited: boolean }) {
+  const accepted = decision === 'accepted'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 text-xs font-medium',
+        accepted ? 'text-success' : 'text-muted-foreground',
+      )}
+    >
+      {accepted ? <Check className="size-3.5" /> : <X className="size-3.5" />}
+      {decisionLabel(accepted, edited)}
+    </span>
+  )
+}
+
 export function SuggestionCard({
   finding,
   decision,
@@ -79,21 +100,7 @@ export function SuggestionCard({
         decision === 'pending' && 'border-border',
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          {finding.operation && (
-            <p className="truncate font-mono text-xs font-medium text-foreground">
-              {finding.operation}
-            </p>
-          )}
-          <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{finding.rule}</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          {finding.owasp && <OwaspBadge owasp={finding.owasp} />}
-          <SeverityBadge severity={finding.severity} />
-          <ConfidenceBadge confidence={finding.confidence} />
-        </div>
-      </div>
+      <FindingHeader finding={finding} />
 
       <p className="mt-2.5 text-sm text-foreground/90">{finding.message}</p>
 
@@ -169,23 +176,7 @@ export function SuggestionCard({
             </>
           ) : (
             <>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 text-xs font-medium',
-                  decision === 'accepted' ? 'text-success' : 'text-muted-foreground',
-                )}
-              >
-                {decision === 'accepted' ? (
-                  <Check className="size-3.5" />
-                ) : (
-                  <X className="size-3.5" />
-                )}
-                {decision === 'accepted'
-                  ? editedContent !== undefined
-                    ? 'Accepted · edited'
-                    : 'Accepted'
-                  : 'Rejected'}
-              </span>
+              <DecisionLabel decision={decision} edited={editedContent !== undefined} />
               <Button size="sm" variant="ghost" onClick={onReset} className="ml-auto">
                 <RotateCcw className="size-3.5" />
                 Undo

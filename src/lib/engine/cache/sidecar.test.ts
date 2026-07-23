@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   hashSpec,
   readSidecar,
+  SCHEMA_VERSION,
   sidecarPathFor,
   withSpecCache,
   writeSidecar,
@@ -163,5 +164,80 @@ describe('withSpecCache', () => {
     const result = await withSpecCache({ sidecarPath: path, specHash: 'h2', compute })
     expect(compute).toHaveBeenCalledTimes(1)
     expect(result.fromCache).toBe(false)
+  })
+})
+
+// A selection-scoped run analyses part of the document. Persisting its partial
+// findings under the spec hash (which does not include the selection) would make
+// a later FULL run reuse them as if they covered everything. The module refuses
+// the write itself rather than trusting every caller to remember.
+describe('scoped results are never persisted', () => {
+  it('withSpecCache with scoped:true computes but writes nothing', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.mcp-doctor.yaml')
+    const compute = vi.fn(async () => ({
+      findings: [finding],
+      summary: { total: 1, errors: 1, warnings: 0, info: 0 },
+      operations: ['GET /users'],
+    }))
+    const result = await withSpecCache({ sidecarPath: path, specHash: 'h1', compute, scoped: true })
+    expect(compute).toHaveBeenCalledTimes(1)
+    expect(result.findings).toHaveLength(1)
+    expect(await readSidecar(path)).toBeNull() // nothing written
+  })
+
+  it('withSpecCache with scoped:true still reads a fresh full-spec cache', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.mcp-doctor.yaml')
+    const compute = vi.fn(async () => ({
+      findings: [finding],
+      summary: { total: 1, errors: 1, warnings: 0, info: 0 },
+      operations: ['GET /users'],
+    }))
+    await withSpecCache({ sidecarPath: path, specHash: 'h1', compute }) // full run seeds it
+    compute.mockClear()
+    const scoped = await withSpecCache({
+      sidecarPath: path,
+      specHash: 'h1',
+      compute,
+      scoped: true,
+    })
+    expect(compute).not.toHaveBeenCalled()
+    expect(scoped.fromCache).toBe(true)
+  })
+
+  it('writeSidecar refuses a payload marked scoped', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.mcp-doctor.yaml')
+    await expect(
+      writeSidecar(path, {
+        schemaVersion: SCHEMA_VERSION,
+        specHash: 'h1',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        scoped: true,
+        findings: [finding],
+        summary: { total: 1, errors: 1, warnings: 0, info: 0 },
+        operations: [],
+      }),
+    ).rejects.toThrow(/scoped/i)
+    expect(await readSidecar(path)).toBeNull()
+  })
+
+  it('readSidecar treats an out-of-band scoped record as a miss', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.mcp-doctor.yaml')
+    await writeFile(
+      path,
+      [
+        `schemaVersion: ${SCHEMA_VERSION}`,
+        'specHash: h1',
+        'generatedAt: 2026-01-01T00:00:00.000Z',
+        'scoped: true',
+        'findings: []',
+        'summary: { total: 0, errors: 0, warnings: 0, info: 0 }',
+        'operations: []',
+      ].join('\n'),
+    )
+    expect(await readSidecar(path)).toBeNull()
   })
 })

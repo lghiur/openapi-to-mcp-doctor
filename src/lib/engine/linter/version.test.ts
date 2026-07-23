@@ -20,6 +20,31 @@ describe('detectVersion', () => {
     expect(detectVersion('openapi: 3.1.1')).toMatchObject({ ok: true, version: '3.1' })
   })
 
+  // YAML parses an unquoted `3.0` as the float 3, whose String() is "3" — the
+  // trailing zero is gone. Recovering the literal source keeps a legal-looking
+  // (if unquoted) spec analysable instead of halting it as undetectable.
+  it('detects 3.0 written unquoted (YAML would otherwise collapse it to the number 3)', () => {
+    expect(detectVersion('openapi: 3.0\ninfo:\n  title: X\n')).toMatchObject({
+      ok: true,
+      version: '3.0',
+      rawVersion: '3.0',
+    })
+  })
+
+  it('detects 3.1 written unquoted', () => {
+    expect(detectVersion('openapi: 3.1\ninfo:\n  title: X\n')).toMatchObject({
+      ok: true,
+      version: '3.1',
+    })
+  })
+
+  it('still rejects a bare `openapi: 3` (no minor version to detect)', () => {
+    expect(detectVersion('openapi: 3\ninfo:\n  title: X\n')).toMatchObject({
+      ok: false,
+      error: 'OAS_VERSION_UNDETECTABLE',
+    })
+  })
+
   it('detects the version from a JSON spec (JSON is valid YAML)', () => {
     const result = detectVersion('{"openapi":"3.1.0","info":{"title":"X"}}')
     expect(result).toEqual({ ok: true, version: '3.1', rawVersion: '3.1.0' })

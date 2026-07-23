@@ -1,6 +1,7 @@
 import type { LanguageModel } from 'ai'
 import type { ZodType } from 'zod'
 import { type OperationRef, operationBasePath } from '@/lib/engine/operations'
+import { type ContentGap, contentGaps } from '@/lib/engine/workers/gaps'
 import { generateStructured } from '@/lib/llm/client'
 import { type SuggestionOutput, SuggestionOutputSchema } from '@/lib/llm/schemas'
 import type { Finding, OpenApiVersion } from '@/types/domain'
@@ -42,10 +43,11 @@ export type RunSuggest = (
 const DEFAULT_CHUNK_SIZE = 12
 const DEFAULT_CONCURRENCY = 4
 
-interface Candidate {
-  finding: Finding
-  operation: OperationRef
-}
+/**
+ * The findings this suggester authors content for: `contentGaps` — the same
+ * definition the worker-prompt path uses, so the two can never drift apart.
+ */
+type Candidate = ContentGap
 
 export function createSuggester(options: CreateSuggesterOptions): RunSuggest {
   const generate = options.generate ?? generateStructured
@@ -53,7 +55,7 @@ export function createSuggester(options: CreateSuggesterOptions): RunSuggest {
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY
 
   return async (findings, operations, version) => {
-    const candidates = candidatesFor(findings, operations)
+    const candidates = contentGaps(operations, findings)
     if (candidates.length === 0) return []
 
     const chunks: Candidate[][] = []
@@ -61,6 +63,11 @@ export function createSuggester(options: CreateSuggesterOptions): RunSuggest {
       chunks.push(candidates.slice(i, i + chunkSize))
     }
 
+    // Chunk isolation: one bad chunk must not discard the others' suggestions.
+    // But if EVERY chunk failed there is nothing to isolate — the gateway is
+    // down, and swallowing that would report "no fixes needed" on a run where
+    // nothing was even asked. Rethrow so the caller marks the agent errored.
+    const failures: unknown[] = []
     const outputs = await mapConcurrent(chunks, concurrency, (chunk) =>
       generate({
         schema: SuggestionOutputSchema,
@@ -68,8 +75,16 @@ export function createSuggester(options: CreateSuggesterOptions): RunSuggest {
         prompt: buildChunkPrompt(chunk),
         model: options.model,
         ...(options.signal ? { abortSignal: options.signal } : {}),
-      }).catch((): SuggestionOutput => ({ suggestions: [] })), // chunk isolation
+      }).catch((cause: unknown): SuggestionOutput => {
+        failures.push(cause)
+        return { suggestions: [] }
+      }),
     )
+    if (failures.length === chunks.length) {
+      throw failures[0] instanceof Error
+        ? failures[0]
+        : new Error('Fix suggestion failed for every batch.')
+    }
 
     const byId = new Map(candidates.map((c) => [c.finding.id, c]))
     const enriched: Finding[] = []
@@ -91,24 +106,6 @@ export function createSuggester(options: CreateSuggesterOptions): RunSuggest {
     }
     return enriched
   }
-}
-
-/** Structural findings that still need a fix, paired with their operation. */
-function candidatesFor(findings: Finding[], operations: OperationRef[]): Candidate[] {
-  const byLocation = new Map(
-    operations.map((op) => [`${op.path} ${op.method.toLowerCase()}`, op]),
-  )
-  const candidates: Candidate[] = []
-  for (const finding of findings) {
-    if (finding.after !== undefined) continue
-    const path = finding.path
-    if (!path || path[0] !== 'paths' || typeof path[1] !== 'string' || typeof path[2] !== 'string')
-      continue
-    const operation = byLocation.get(`${path[1]} ${path[2].toLowerCase()}`)
-    if (!operation) continue
-    candidates.push({ finding, operation })
-  }
-  return candidates
 }
 
 function buildSystemPrompt(version: OpenApiVersion): string {
@@ -138,10 +135,10 @@ function buildChunkPrompt(chunk: Candidate[]): string {
   const sections = [...operations.values()].map(
     (op) => `### ${op.label}\n\`\`\`json\n${JSON.stringify(op.definition, null, 2)}\n\`\`\``,
   )
-  const findingLines = chunk.map(({ finding, operation }) => {
-    const relative = finding.path ? finding.path.slice(3) : []
-    return `- findingId ${finding.id} | operation ${operation.label} | rule ${finding.rule} | at ${JSON.stringify(relative)} | ${finding.message}`
-  })
+  const findingLines = chunk.map(
+    ({ finding, operation, relativePath }) =>
+      `- findingId ${finding.id} | operation ${operation.label} | rule ${finding.rule} | at ${JSON.stringify(relativePath)} | ${finding.message}`,
+  )
   return [
     `Operations under review:`,
     ...sections,

@@ -8,6 +8,7 @@
  * When the source PR closes, the fix PR is re-pointed at the source PR's
  * target branch or closed if nothing remains.
  */
+import { isNotFoundError, isRefAlreadyExistsError } from './errors'
 
 /** Branch that carries the stacked fix PR for a source branch. */
 export function fixBranchName(sourceBranch: string): string {
@@ -132,12 +133,6 @@ function asContentFile(data: unknown): ContentFile | null {
     : null
 }
 
-function isNotFound(error: unknown): boolean {
-  return (
-    typeof error === 'object' && error !== null && (error as { status?: unknown }).status === 404
-  )
-}
-
 /**
  * Read a file at a ref. Null strictly means "no such file" (404 or the path is
  * a directory); every other API error is rethrown — collapsing errors to null
@@ -156,7 +151,7 @@ async function readFileAt(
   try {
     res = await api.repos.getContent({ owner, repo, path, ref })
   } catch (error) {
-    if (isNotFound(error)) return null
+    if (isNotFoundError(error)) return null
     throw error
   }
   const file = asContentFile(res.data)
@@ -183,7 +178,7 @@ async function branchSha(
     const ref = await api.git.getRef({ owner, repo, ref: `heads/${branch}` })
     return ref.data.object.sha
   } catch (error) {
-    if (isNotFound(error)) return null
+    if (isNotFoundError(error)) return null
     throw error
   }
 }
@@ -214,7 +209,11 @@ export async function ensureStackedFixPr(
     // previous runs never accumulate or conflict.
     try {
       await api.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: sourceSha })
-    } catch {
+    } catch (error) {
+      // Only "the ref is already there" justifies the forced update. A 401/403/
+      // 429 must propagate with its own message — retried as updateRef it comes
+      // back as a misleading "Reference does not exist".
+      if (!isRefAlreadyExistsError(error)) throw error
       await api.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: sourceSha, force: true })
     }
 

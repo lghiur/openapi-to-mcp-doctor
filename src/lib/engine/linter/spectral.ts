@@ -78,27 +78,55 @@ export async function runStructuralLint(
 
 /**
  * Replace every `null` value (object property OR array element) with an empty
- * string, recursively.
+ * string, recursively, and cut any reference cycle the same way.
  *
- * Why: nimma — the JSONPath engine Spectral and its built-in `oas` ruleset use —
- * throws `Cannot read properties of null (reading 'enum')` when a recursive
+ * Why nulls: nimma — the JSONPath engine Spectral and its built-in `oas` ruleset
+ * use — throws `Cannot read properties of null (reading 'enum')` when a recursive
  * `$..[?(@.x)]` filter descends into a literal `null` node. Real specs are full of
  * nulls (Tyk's has dozens, e.g. `Locality: null`), so a single one would otherwise
- * abort the entire structural run. An empty string is inert — it matches no schema,
- * enum, or properties rule — and preserves array indices and object keys, so the
- * paths in our findings stay accurate.
+ * abort the entire structural run.
+ *
+ * Why cycles: YAML anchors may reference an ancestor (`Node: &n {child: *n}`),
+ * which the parser faithfully turns into a cyclic object graph. Walking it —
+ * here, in the ruleset walks, or in nimma's traversal — never terminates. Cutting
+ * a back-edge yields a finite document that still lints; only the infinitely deep
+ * expansion is lost, which no rule could have inspected anyway.
+ *
+ * The replacement is an empty string in both cases: inert (it matches no schema,
+ * enum, or properties rule) while preserving array indices and object keys, so
+ * the paths in our findings stay accurate.
  */
 export function sanitizeNulls(value: unknown): unknown {
+  return sanitize(value, new Set<object>())
+}
+
+/** `ancestors` holds the nodes on the current path — membership means a cycle. */
+function sanitize(value: unknown, ancestors: Set<object>): unknown {
   if (value === null) return ''
-  if (Array.isArray(value)) return value.map(sanitizeNulls)
-  if (typeof value === 'object') {
+  if (typeof value !== 'object') return value
+  if (ancestors.has(value)) return ''
+
+  ancestors.add(value)
+  try {
+    if (Array.isArray(value)) return value.map((item) => sanitize(item, ancestors))
     const out: Record<string, unknown> = {}
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = sanitizeNulls(val)
+      // Plain assignment would treat a literal `__proto__` key (legal in YAML and
+      // JSON) as a prototype write: the key vanishes from the output and the
+      // node inherits the value's members, inventing findings that aren't there.
+      Object.defineProperty(out, key, {
+        value: sanitize(val, ancestors),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
     }
     return out
+  } finally {
+    // Siblings are not ancestors: a node shared by two branches must expand in
+    // both. Only a node still on the current path is a cycle.
+    ancestors.delete(value)
   }
-  return value
 }
 
 /**

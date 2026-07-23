@@ -15,7 +15,6 @@ export interface FindingRowData {
   before: string
   after: string
   resolution: Resolution
-  autoFixed: boolean
 }
 
 type Tab = 'all' | 'accepted' | 'rejected' | 'pending'

@@ -1,4 +1,4 @@
-import { ConfidenceBadge, OwaspBadge, SeverityBadge } from '@/components/ui/severity'
+import { FindingHeader } from '@/features/analyze/components/FindingHeader'
 import type { SSEFinding } from '@/types/domain'
 
 /**
@@ -12,21 +12,7 @@ export function DiagnosticCard({ finding }: { finding: SSEFinding }) {
       id={`finding-${finding.id}`}
       className="animate-rise rounded-xl border border-border bg-card p-4 shadow-sm"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          {finding.operation && (
-            <p className="truncate font-mono text-xs font-medium text-foreground">
-              {finding.operation}
-            </p>
-          )}
-          <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{finding.rule}</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          {finding.owasp && <OwaspBadge owasp={finding.owasp} />}
-          <SeverityBadge severity={finding.severity} />
-          <ConfidenceBadge confidence={finding.confidence} />
-        </div>
-      </div>
+      <FindingHeader finding={finding} />
 
       <p className="mt-2.5 text-sm text-foreground/90">{finding.message}</p>
 

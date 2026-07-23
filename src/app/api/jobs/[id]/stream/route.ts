@@ -166,12 +166,23 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
           try {
             const gh = createGitHubClient(accessToken)
             const { owner, repo, branch } = job.repo
-            const paths = await gh.listSourceCandidates(owner, repo, branch)
-            const routeFiles = paths.length ? await gh.readFiles(owner, repo, paths, branch) : []
+            const listing = await gh.listSourceCandidates(owner, repo, branch)
+            const read = listing.paths.length
+              ? await gh.readFiles(owner, repo, listing.paths, branch)
+              : { files: [], failed: 0 }
+            const routeFiles = read.files
             if (routeFiles.length > 0) {
               // Operator evidence that grounding really ran (paths only, no content).
+              // A truncated tree or failed reads mean the grounding view of the repo
+              // is partial — say so rather than imply full coverage.
+              const partial = [
+                listing.truncated ? 'tree truncated' : '',
+                read.failed > 0 ? `${read.failed} unreadable` : '',
+              ]
+                .filter(Boolean)
+                .join(', ')
               console.info(
-                `[mcp-doctor] job ${id}: grounding enabled — reading ${routeFiles.length} source file(s) from ${owner}/${repo}@${branch}: ${routeFiles.map((f) => f.path).join(', ')}`,
+                `[mcp-doctor] job ${id}: grounding enabled — reading ${routeFiles.length} source file(s)${partial ? ` (partial: ${partial})` : ''} from ${owner}/${repo}@${branch}: ${routeFiles.map((f) => f.path).join(', ')}`,
               )
               const runGround = ai.runGrounding
               grounding = (operations, version) => runGround(operations, routeFiles, version)

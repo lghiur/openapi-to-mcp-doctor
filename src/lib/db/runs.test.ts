@@ -100,6 +100,32 @@ describe('RunStore', () => {
     expect(updated?.summary.accepted).toBe(1)
   })
 
+  it('applies a batch of resolutions in one pass', () => {
+    store = openRunStore(':memory:')
+    const record = run('r1', '2026-06-24T00:00:00Z')
+    record.findings = [
+      { ...record.findings[0]!, id: 'find-1' },
+      { ...record.findings[0]!, id: 'find-2' },
+      { ...record.findings[0]!, id: 'find-3' },
+    ]
+    store.saveRun(record, 'user-1')
+    store.updateResolutions('r1', [
+      { findingId: 'find-1', resolution: 'accepted' },
+      { findingId: 'find-3', resolution: 'rejected' },
+    ])
+    const updated = store.getRun('r1')
+    expect(updated?.findings.map((f) => f.resolution)).toEqual(['accepted', 'pending', 'rejected'])
+    expect(updated?.summary.accepted).toBe(1)
+    expect(updated?.summary.rejected).toBe(1)
+  })
+
+  it('ignores a batch aimed at an unknown run', () => {
+    store = openRunStore(':memory:')
+    expect(() =>
+      store.updateResolutions('nope', [{ findingId: 'find-1', resolution: 'accepted' }]),
+    ).not.toThrow()
+  })
+
   it('returns null for an unknown run', () => {
     store = openRunStore(':memory:')
     expect(store.getRun('nope')).toBeNull()
